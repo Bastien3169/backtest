@@ -1,0 +1,27 @@
+# Environnements virtuels
+venv/
+.venv/
+*venv
+*venv311
+*venv/
+*venv311/
+
+
+# Caches et artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.pkl
+*.log
+.cache/
+.ipynb_checkpoints/
+
+# Git / IDE
+.git/
+*.swp
+*.bak
+*.tmp
+
+
+.DS_Store
+dist/
