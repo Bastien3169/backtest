@@ -107,15 +107,39 @@ with st.sidebar:
         index=0,
     )
 
-    durees_raw = st.text_input(
-        "Durées d'investissement (séparées par des virgules)",
-        value="7,30,90",
-        help="Ex : 1,7,30 — définit les colonnes des résultats",
+    mode_duree = st.radio(
+        "Mode de période",
+        ["Durées prédéfinies", "Plage de dates"],
+        index=0, horizontal=True,
     )
-    try:
-        durees = sorted(set(int(x.strip()) for x in durees_raw.split(",") if x.strip().isdigit()))
-    except Exception:
-        durees = [7, 30, 90]
+
+    durees = [7, 30, 90]
+    date_range = None
+
+    if mode_duree == "Durées prédéfinies":
+        durees_raw = st.text_input(
+            "Durées (en nombre de bougies, séparées par des virgules)",
+            value="7,30,90",
+            help="Ex : 7,30,90 — définit les colonnes des résultats",
+        )
+        try:
+            durees = sorted(set(int(x.strip()) for x in durees_raw.split(",") if x.strip().isdigit()))
+        except Exception:
+            durees = [7, 30, 90]
+    else:
+        from datetime import date, timedelta
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            date_debut = st.date_input("Du", value=date.today() - timedelta(days=90))
+        with col_d2:
+            date_fin = st.date_input("Au", value=date.today())
+        if date_debut < date_fin:
+            date_range = (date_debut, date_fin)
+            delta = (date_fin - date_debut).days
+            durees = [delta]
+            st.caption(f"→ {delta} jours de backtest")
+        else:
+            st.error("La date de début doit être avant la date de fin")
 
     st.divider()
 
@@ -197,87 +221,111 @@ for i, strat in enumerate(st.session_state.strategies):
         mm_labels = [1, 10, 20, 50, 100, 200]
 
         def render_indicator_bloc(side: str, key_prefix: str) -> dict:
-            """
-            Affiche le bloc indicateurs pour un côté (achat ou vente).
-            Retourne la config du côté.
-            """
-            col1, col2 = st.columns(2)
+            use_rsi        = False
+            rsi_period     = 14
+            rsi_threshold  = 30.0 if side == "buy" else 70.0
+            mm_selected    = []
+            mm_period_sel  = None
+            mm_condition   = None
+            mm_cross_a     = None
+            mm_cross_b     = None
+            btc_cross_period = None
+            use_macd       = False
+            use_bollinger  = False
+            bollinger_band = None
 
-            with col1:
-                use_rsi = st.checkbox("RSI", key=f"{key_prefix}_rsi")
-                rsi_period, rsi_threshold = 14, (30.0 if side == "buy" else 70.0)
+            col_a, col_b = st.columns(2)
+
+            # ── Colonne gauche : RSI + MM ─────────────────────────────────
+            with col_a:
+                # RSI
+                st.markdown("**📉 RSI**")
+                use_rsi = st.checkbox("Activer", key=f"{key_prefix}_rsi")
                 if use_rsi:
-                    rsi_period = st.number_input("Période RSI", 2, 50, 14, key=f"{key_prefix}_rsi_p")
-                    label = "Achat si RSI <" if side == "buy" else "Vente si RSI >"
-                    rsi_threshold = st.number_input(label, 1.0, 99.0,
-                                                    30.0 if side == "buy" else 70.0,
-                                                    key=f"{key_prefix}_rsi_th")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        rsi_period = st.number_input("Période", 2, 50, 14, key=f"{key_prefix}_rsi_p")
+                    with c2:
+                        label = "Achat si <" if side == "buy" else "Vente si >"
+                        rsi_threshold = st.number_input(label, 1.0, 99.0,
+                                                        30.0 if side == "buy" else 70.0,
+                                                        key=f"{key_prefix}_rsi_th")
+                st.write("")
 
-                st.write("**Moyennes Mobiles**")
-                mm_cols = st.columns(3)
-                mm_selected = []
+                # MM
+                st.markdown("**📈 Moyennes Mobiles**")
+                mm_cols = st.columns(6)
                 for j, p in enumerate(mm_labels):
-                    with mm_cols[j % 3]:
-                        if st.checkbox(f"MM{p}", key=f"{key_prefix}_mm_{p}"):
+                    with mm_cols[j]:
+                        if st.checkbox(f"{p}", key=f"{key_prefix}_mm_{p}"):
                             mm_selected.append(p)
-
-            with col2:
-                mm_condition, mm_period_sel = None, None
                 if mm_selected:
-                    mm_period_sel = st.selectbox("MM de référence",
-                                                 options=mm_selected, key=f"{key_prefix}_mm_ref")
-                    label = "Prix au-dessus → achat" if side == "buy" else "Prix au-dessus → vente"
-                    mm_condition = st.radio("Condition",
-                                            ["above", "below"],
-                                            format_func=lambda x: "Prix au-dessus" if x == "above" else "Prix en dessous",
-                                            key=f"{key_prefix}_mm_cond")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        mm_period_sel = st.selectbox("MM de référence",
+                                                     options=mm_selected, key=f"{key_prefix}_mm_ref")
+                    with c2:
+                        mm_condition = st.radio("Condition",
+                                                ["above", "below"],
+                                                format_func=lambda x: "Au-dessus ↑" if x == "above" else "En-dessous ↓",
+                                                key=f"{key_prefix}_mm_cond")
 
-                use_cross = st.checkbox("Croisement MM", key=f"{key_prefix}_cross")
-                mm_cross_a, mm_cross_b = None, None
+            # ── Colonne droite : Cross MM + BTC + MACD + Bollinger ────────
+            with col_b:
+                # Croisement MM
+                st.markdown("**🔀 Croisement MM**")
+                use_cross = st.checkbox(
+                    "Golden cross" if side == "buy" else "Death cross",
+                    key=f"{key_prefix}_cross"
+                )
                 if use_cross:
                     c1, c2 = st.columns(2)
                     with c1:
-                        mm_cross_a = st.selectbox("MM courte (A)", mm_labels, index=2, key=f"{key_prefix}_cross_a")
+                        mm_cross_a = st.selectbox("Courte (A)", mm_labels, index=2, key=f"{key_prefix}_cross_a")
                     with c2:
-                        mm_cross_b = st.selectbox("MM longue (B)", mm_labels, index=4, key=f"{key_prefix}_cross_b")
-                    if side == "buy":
-                        st.caption("Golden cross : MM courte passe **au-dessus** de MM longue")
-                    else:
-                        st.caption("Death cross : MM courte passe **en-dessous** de MM longue")
+                        mm_cross_b = st.selectbox("Longue (B)", mm_labels, index=4, key=f"{key_prefix}_cross_b")
+                st.write("")
 
-                use_btc_cross = st.checkbox("Croisement MM vs BTC", key=f"{key_prefix}_btc")
-                btc_cross_period = None
-                if use_btc_cross:
-                    btc_cross_period = st.selectbox("Période MM (actif ET BTC)",
-                                                    mm_labels, index=3, key=f"{key_prefix}_btc_p")
-                    if side == "buy":
-                        st.caption(f"→ MM{btc_cross_period} actif passe **au-dessus** MM{btc_cross_period} BTC")
-                    else:
-                        st.caption(f"→ MM{btc_cross_period} actif passe **en-dessous** MM{btc_cross_period} BTC")
+                # Croisement BTC
+                st.markdown("**₿ Croisement vs BTC**")
+                use_btc = st.checkbox("Activer", key=f"{key_prefix}_btc")
+                if use_btc:
+                    btc_cross_period = st.selectbox("Période MM", mm_labels, index=3, key=f"{key_prefix}_btc_p")
+                    lbl = f"MM{btc_cross_period} actif > MM{btc_cross_period} BTC" if side == "buy" else f"MM{btc_cross_period} actif < MM{btc_cross_period} BTC"
+                    st.caption(lbl)
+                st.write("")
 
-                use_macd = st.checkbox("MACD", key=f"{key_prefix}_macd")
+                # MACD
+                st.markdown("**〰️ MACD**")
+                use_macd = st.checkbox(
+                    "Haussier" if side == "buy" else "Baissier",
+                    key=f"{key_prefix}_macd"
+                )
+                st.write("")
 
-                use_bollinger = st.checkbox("Bollinger", key=f"{key_prefix}_boll")
-                bollinger_band = None
+                # Bollinger
+                st.markdown("**📊 Bollinger**")
+                use_bollinger = st.checkbox("Activer", key=f"{key_prefix}_boll")
                 if use_bollinger:
-                    bollinger_band = st.radio("Bande Bollinger",
+                    bollinger_band = st.radio("Bande",
                                               ["haute", "basse"],
-                                              format_func=lambda x: "Bande haute" if x == "haute" else "Bande basse",
-                                              key=f"{key_prefix}_boll_band")
+                                              format_func=lambda x: "Haute 🔴" if x == "haute" else "Basse 🟢",
+                                              key=f"{key_prefix}_boll_band",
+                                              horizontal=True)
 
             return {
-                "use_rsi":        use_rsi,
-                "rsi_period":     rsi_period,
-                "rsi_threshold":  rsi_threshold,
-                "mm_periods":     mm_selected,
-                "mm_period":      mm_period_sel,
-                "mm_condition":   mm_condition,
-                "mm_cross_a":     mm_cross_a,
-                "mm_cross_b":     mm_cross_b,
+                "use_rsi":          use_rsi,
+                "rsi_period":       rsi_period,
+                "rsi_threshold":    rsi_threshold,
+                "mm_periods":       mm_selected,
+                "mm_period":        mm_period_sel,
+                "mm_condition":     mm_condition,
+                "mm_cross_a":       mm_cross_a,
+                "mm_cross_b":       mm_cross_b,
                 "btc_cross_period": btc_cross_period,
-                "use_macd":       use_macd,
-                "use_bollinger":  use_bollinger,
-                "bollinger_band": bollinger_band,
+                "use_macd":         use_macd,
+                "use_bollinger":    use_bollinger,
+                "bollinger_band":   bollinger_band,
             }
 
         st.markdown("#### 🟢 Indicateurs d'achat")
@@ -347,24 +395,29 @@ with col_status:
     if st.session_state.df_ohlcv is None:
         st.warning("Chargez d'abord les données marché (sidebar).")
 
+# Toggle debug dans la sidebar
+with st.sidebar:
+    st.divider()
+    show_debug = st.radio("Mode debug", ["Masqué", "Visible"], index=0, horizontal=True) == "Visible"
+
 if run_clicked:
     all_results = {}
     all_trades = {}
 
     # ── DEBUG ──────────────────────────────────────────────────────────────
-    st.subheader("🔍 Debug")
-    df_ohlcv = st.session_state.df_ohlcv
-    st.write(f"**df_ohlcv** : `{type(df_ohlcv)}` — shape : `{df_ohlcv.shape if df_ohlcv is not None else 'None'}`")
-    if df_ohlcv is not None and not df_ohlcv.empty:
-        st.write(f"Index : `{df_ohlcv.index[0]}` → `{df_ohlcv.index[-1]}`")
-        st.dataframe(df_ohlcv.tail(5))
-    else:
-        st.error("❌ df_ohlcv est vide ou None — le chargement des données a échoué")
-
-    st.write(f"**Durées** : `{durees}`")
-    st.write(f"**Nb stratégies** : `{len(strategies_config)}`")
-    for s in strategies_config:
-        st.write(f"- `{s['name']}` | capital={s['capital']} | achat={s['ind_achat']} | vente={s['ind_vente']}")
+    if show_debug:
+        st.subheader("🔍 Debug")
+        df_ohlcv = st.session_state.df_ohlcv
+        st.write(f"**df_ohlcv** : `{type(df_ohlcv)}` — shape : `{df_ohlcv.shape if df_ohlcv is not None else 'None'}`")
+        if df_ohlcv is not None and not df_ohlcv.empty:
+            st.write(f"Index : `{df_ohlcv.index[0]}` → `{df_ohlcv.index[-1]}`")
+            st.dataframe(df_ohlcv.tail(5))
+        else:
+            st.error("❌ df_ohlcv est vide ou None — le chargement des données a échoué")
+        st.write(f"**Durées** : `{durees}`")
+        st.write(f"**Nb stratégies** : `{len(strategies_config)}`")
+        for s in strategies_config:
+            st.write(f"- `{s['name']}` | capital={s['capital']} | achat={s['ind_achat']} | vente={s['ind_vente']}")
     # ── FIN DEBUG ──────────────────────────────────────────────────────────
 
     progress = st.progress(0, text="Calcul en cours...")
@@ -399,14 +452,16 @@ if run_clicked:
             capital=strat["capital"],
             frais_pct=frais_pct,
             durees=durees,
+            date_range=date_range if mode_duree == "Plage de dates" else None,
         )
 
         # ── DEBUG résultats ────────────────────────────────────────────────
-        st.write(f"**Résultats bruts `{strat['name']}`** :")
-        for d, r in res.items():
-            nb_trades = len(r.get("trades", []))
-            eq = r.get("equity_curve", None)
-            st.write(f"  durée={d}j → plus_value={r.get('plus_value_eur')}€ | rendement={r.get('rendement_pct')}% | trades={nb_trades} | equity_len={len(eq) if eq is not None else 0}")
+        if show_debug:
+            st.write(f"**Résultats bruts `{strat['name']}`** :")
+            for d, r in res.items():
+                nb_trades = len(r.get("trades", []))
+                eq = r.get("equity_curve", None)
+                st.write(f"  durée={d}j → plus_value={r.get('plus_value_eur')}€ | rendement={r.get('rendement_pct')}% | trades={nb_trades} | equity_len={len(eq) if eq is not None else 0}")
         # ── FIN DEBUG ──────────────────────────────────────────────────────
 
         all_results[strat["name"]] = res
