@@ -104,6 +104,7 @@ def run_backtest_single(
     capital: float,
     frais_pct: float,
     duree: int,
+    date_range: tuple | None = None,
 ) -> dict:
     if len(df) < 2:
         return _empty_result()
@@ -127,7 +128,16 @@ def run_backtest_single(
 
     # Calcul indicateurs sur le DF COMPLET
     df_full  = apply_all_indicators(df, ind_merged)
-    df_slice = df_full.iloc[-duree:].copy() if len(df_full) >= duree else df_full.copy()
+
+    # Slice : par plage de dates OU par nombre de bougies
+    if date_range is not None:
+        date_debut, date_fin = date_range
+        mask = (df_full.index.date >= date_debut) & (df_full.index.date <= date_fin)
+        df_slice = df_full.loc[mask].copy()
+        if df_slice.empty:
+            return _empty_result()
+    else:
+        df_slice = df_full.iloc[-duree:].copy() if len(df_full) >= duree else df_full.copy()
 
     sig_buy  = _build_signal(df_slice, ind_achat, side="buy")
     sig_sell = _build_signal(df_slice, ind_vente, side="sell")
@@ -145,17 +155,18 @@ def run_backtest_single(
         price = row["close"]
         equity.append({"timestamp": ts, "equity": cash + position * price})
 
-        if position == 0 and cash > 0:
-            if sig_buy.iloc[i]:
-                qty  = (cash * (1 - frais_pct / 100)) / price
-                cost = qty * price * (1 + frais_pct / 100)
-                if cost <= cash:
-                    cash       -= cost
-                    position    = qty
-                    entry_price = price
-                    trades.append({"timestamp": ts, "type": "buy", "price": price,
-                                   "capital": cash + position * price})
+        # ── ACHAT : seulement si pas déjà en position ──────────────────
+        if position == 0 and cash > 0 and sig_buy.iloc[i]:
+            qty  = (cash * (1 - frais_pct / 100)) / price
+            cost = qty * price * (1 + frais_pct / 100)
+            if cost <= cash:
+                cash       -= cost
+                position    = qty
+                entry_price = price
+                trades.append({"timestamp": ts, "type": "buy", "price": price,
+                               "capital": cash + position * price})
 
+        # ── VENTE : seulement si on détient une position ────────────────
         elif position > 0 and entry_price is not None:
             gain_pct    = (price - entry_price) / entry_price * 100
             should_sell = False
@@ -250,11 +261,13 @@ def run_strategy(
     capital: float,
     frais_pct: float,
     durees: list[int],
+    date_range: tuple | None = None,
 ) -> dict:
     results = {}
     for d in durees:
         results[d] = run_backtest_single(
             df=df, strategy=strategy,
-            capital=capital, frais_pct=frais_pct, duree=d,
+            capital=capital, frais_pct=frais_pct,
+            duree=d, date_range=date_range,
         )
     return results
