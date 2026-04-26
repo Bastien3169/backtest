@@ -29,16 +29,45 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
         else:
             conditions.append(df["rsi"] > threshold)
 
-    # ── MM : prix au-dessus / en dessous ─────────────────────────────────
-    mm_period    = cfg.get("mm_period")
-    mm_condition = cfg.get("mm_condition")
-    if mm_period and mm_condition:
-        col = f"mm_{mm_period}"
-        if col in df.columns:
-            if mm_condition == "above":
+    # ── MM : prix au-dessus / en dessous (toutes les MM cochées) ─────────
+    mm_configs = cfg.get("mm_configs", {})
+    all_slopes = {"up", "down", "flat"}
+
+    if mm_configs:
+        # Chaque MM cochée génère ses propres conditions (ET entre elles)
+        for period, mcfg in mm_configs.items():
+            col = f"mm_{period}"
+            if col not in df.columns:
+                continue
+            cond  = mcfg.get("condition", "above")
+            slope = set(mcfg.get("slope", ["up", "down", "flat"]))
+
+            if cond == "above":
                 conditions.append(df["close"] > df[col])
             else:
                 conditions.append(df["close"] < df[col])
+
+            if slope and slope != all_slopes:
+                slope_col = f"mm_{period}_slope"
+                if slope_col in df.columns:
+                    conditions.append(df[slope_col].isin(slope))
+    else:
+        # Fallback ancien format (mm_period unique)
+        mm_period    = cfg.get("mm_period")
+        mm_condition = cfg.get("mm_condition")
+        mm_slope     = cfg.get("mm_slope", [])
+        if mm_period and mm_condition:
+            col = f"mm_{mm_period}"
+            if col in df.columns:
+                if mm_condition == "above":
+                    conditions.append(df["close"] > df[col])
+                else:
+                    conditions.append(df["close"] < df[col])
+                selected_slopes = set(mm_slope) if mm_slope else all_slopes
+                if selected_slopes and selected_slopes != all_slopes:
+                    slope_col = f"mm_{mm_period}_slope"
+                    if slope_col in df.columns:
+                        conditions.append(df[slope_col].isin(selected_slopes))
 
     # ── Croisement MM A / MM B ────────────────────────────────────────────
     cross_a = cfg.get("mm_cross_a")

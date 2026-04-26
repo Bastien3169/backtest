@@ -94,6 +94,25 @@ def add_btc_mm(df: pd.DataFrame, btc_mm: pd.Series) -> pd.DataFrame:
     return df
 
 
+def add_mm_slope(df: pd.DataFrame, period: int, flat_threshold: float = 0.0005) -> pd.DataFrame:
+    """
+    Ajoute une colonne 'mm_{period}_slope' indiquant la direction de la MM :
+        'up'   → MM monte  (variation > +threshold)
+        'down' → MM descend (variation < -threshold)
+        'flat' → MM plate  (variation dans [-threshold, +threshold])
+    """
+    df = df.copy()
+    col = f"mm_{period}"
+    if col not in df.columns:
+        df = add_moving_averages(df, [period])
+    pct_change = df[col].pct_change()
+    slope_col = f"mm_{period}_slope"
+    df[slope_col] = "flat"
+    df.loc[pct_change >  flat_threshold, slope_col] = "up"
+    df.loc[pct_change < -flat_threshold, slope_col] = "down"
+    return df
+
+
 def apply_all_indicators(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     """
     Applique les indicateurs en fonction de la configuration d'une stratégie.
@@ -105,10 +124,14 @@ def apply_all_indicators(df: pd.DataFrame, config: dict) -> pd.DataFrame:
         use_macd       : bool
         use_bollinger  : bool
         bollinger_band : "haute" | "basse"
-        btc_mm         : pd.Series | None  (MM BTC pré-calculée)
+        btc_mm         : pd.Series | None
     """
     df = df.copy()
     df = add_moving_averages(df, MM_PERIODS)
+
+    # Pente pour chaque MM
+    for p in MM_PERIODS:
+        df = add_mm_slope(df, p)
 
     if config.get("use_rsi"):
         df = add_rsi(df, period=config.get("rsi_period", 14))

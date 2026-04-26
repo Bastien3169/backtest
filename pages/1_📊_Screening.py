@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 
 from src.utils.market_data import load_screening_data
 from src.utils.coins_updater import update_coins
-from src.utils.coins import COINS
+from src.utils.data_loader import get_top100_coins
 
 st.set_page_config(page_title="Screening Crypto", page_icon="📊", layout="wide")
 
@@ -31,12 +31,15 @@ st.caption(
     "**Bêta** : réactivité aux mouvements du BTC (BTC +1% → alt +β%)"
 )
 
+# Lecture fraîche à chaque run
+_nb_coins = len(get_top100_coins())
+
 # ---------------------------------------------------------------------------
 # Mise à jour de la liste des cryptos
 # ---------------------------------------------------------------------------
 with st.expander("🔁 Mettre à jour la liste des cryptos (top 100 CoinGecko)", expanded=False):
     st.markdown(
-        f"Liste actuelle : **{len(COINS)} cryptos** vérifiées sur yfinance.  \n"
+        f"Liste actuelle : **{_nb_coins} cryptos** vérifiées sur yfinance.  \n"
         "Ce bouton récupère le top 100 CoinGecko par market cap, teste chaque ticker "
         "sur Yahoo Finance et met à jour la liste automatiquement.  \n"
         "⏱ Durée estimée : **2-4 minutes**."
@@ -51,8 +54,8 @@ with st.expander("🔁 Mettre à jour la liste des cryptos (top 100 CoinGecko)",
             prog.empty()
             st.success(f"✅ {len(available)} cryptos disponibles sur yfinance")
             if skipped:
-                st.warning(f"⚠️ {len(skipped)} tickers ignorés (non dispo sur yfinance) : {', '.join(skipped)}")
-            st.info("🔄 **Redémarre Streamlit** (`Ctrl+C` puis `streamlit run app.py`) pour que la nouvelle liste soit active dans le backtest et le screening.")
+                st.warning(f"⚠️ {len(skipped)} tickers ignorés : {', '.join(skipped)}")
+            st.info("✅ La liste est mise à jour — elle sera active au prochain chargement de données.")
         except Exception as e:
             prog.empty()
             st.error(f"❌ Erreur : {e}")

@@ -21,6 +21,7 @@ from src.controllers.charts import (
     chart_drawdown_comparison,
 )
 from src.controllers.indicators import MM_PERIODS
+from src.views.indicator_bloc import render_indicator_bloc
 
 # ---------------------------------------------------------------------------
 # Config page
@@ -47,17 +48,11 @@ if "df_ohlcv" not in st.session_state:
     st.session_state.df_ohlcv = None
 
 if "btc_mm_cache" not in st.session_state:
-    st.session_state.btc_mm_cache = {}  # {period: pd.Series}
-    with st.spinner("Chargement du top 100 CoinGecko..."):
-        try:
-            st.session_state.coin_list = get_top100_coins()
-        except Exception:
-            st.session_state.coin_list = [
-                {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
-                {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
-            ]
+    st.session_state.btc_mm_cache = {}
 
-coin_list = st.session_state.coin_list
+# coin_list : toujours relue depuis coins.py (pas mise en cache)
+# → se met à jour automatiquement après un coins_updater + redémarrage Streamlit
+coin_list = get_top100_coins()
 coin_options = {f"{c['symbol']} — {c['name']}": c["id"] for c in coin_list}
 
 # ---------------------------------------------------------------------------
@@ -119,8 +114,8 @@ with st.sidebar:
     if mode_duree == "Durées prédéfinies":
         durees_raw = st.text_input(
             "Durées (en nombre de bougies, séparées par des virgules)",
-            value="7,30,90",
-            help="Ex : 7,30,90 — définit les colonnes des résultats",
+            value="180,360,720",
+            help="Ex : 180,360,720 — définit les colonnes des résultats",
         )
         try:
             durees = sorted(set(int(x.strip()) for x in durees_raw.split(",") if x.strip().isdigit()))
@@ -218,123 +213,12 @@ for i, strat in enumerate(st.session_state.strategies):
         st.divider()
 
         # ── Indicateurs ───────────────────────────────────────────────────
-        mm_labels = [1, 10, 20, 50, 100, 200]
-
-        def render_indicator_bloc(side: str, key_prefix: str) -> dict:
-            use_rsi        = False
-            rsi_period     = 14
-            rsi_threshold  = 30.0 if side == "buy" else 70.0
-            mm_selected    = []
-            mm_period_sel  = None
-            mm_condition   = None
-            mm_cross_a     = None
-            mm_cross_b     = None
-            btc_cross_period = None
-            use_macd       = False
-            use_bollinger  = False
-            bollinger_band = None
-
-            col_a, col_b = st.columns(2)
-
-            # ── Colonne gauche : RSI + MM ─────────────────────────────────
-            with col_a:
-                # RSI
-                st.markdown("**📉 RSI**")
-                use_rsi = st.checkbox("Activer", key=f"{key_prefix}_rsi")
-                if use_rsi:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        rsi_period = st.number_input("Période", 2, 50, 14, key=f"{key_prefix}_rsi_p")
-                    with c2:
-                        label = "Achat si <" if side == "buy" else "Vente si >"
-                        rsi_threshold = st.number_input(label, 1.0, 99.0,
-                                                        30.0 if side == "buy" else 70.0,
-                                                        key=f"{key_prefix}_rsi_th")
-                st.write("")
-
-                # MM
-                st.markdown("**📈 Moyennes Mobiles**")
-                mm_cols = st.columns(6)
-                for j, p in enumerate(mm_labels):
-                    with mm_cols[j]:
-                        if st.checkbox(f"{p}", key=f"{key_prefix}_mm_{p}"):
-                            mm_selected.append(p)
-                if mm_selected:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        mm_period_sel = st.selectbox("MM de référence",
-                                                     options=mm_selected, key=f"{key_prefix}_mm_ref")
-                    with c2:
-                        mm_condition = st.radio("Condition",
-                                                ["above", "below"],
-                                                format_func=lambda x: "Au-dessus ↑" if x == "above" else "En-dessous ↓",
-                                                key=f"{key_prefix}_mm_cond")
-
-            # ── Colonne droite : Cross MM + BTC + MACD + Bollinger ────────
-            with col_b:
-                # Croisement MM
-                st.markdown("**🔀 Croisement MM**")
-                use_cross = st.checkbox(
-                    "Golden cross" if side == "buy" else "Death cross",
-                    key=f"{key_prefix}_cross"
-                )
-                if use_cross:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        mm_cross_a = st.selectbox("Courte (A)", mm_labels, index=2, key=f"{key_prefix}_cross_a")
-                    with c2:
-                        mm_cross_b = st.selectbox("Longue (B)", mm_labels, index=4, key=f"{key_prefix}_cross_b")
-                st.write("")
-
-                # Croisement BTC
-                st.markdown("**₿ Croisement vs BTC**")
-                use_btc = st.checkbox("Activer", key=f"{key_prefix}_btc")
-                if use_btc:
-                    btc_cross_period = st.selectbox("Période MM", mm_labels, index=3, key=f"{key_prefix}_btc_p")
-                    lbl = f"MM{btc_cross_period} actif > MM{btc_cross_period} BTC" if side == "buy" else f"MM{btc_cross_period} actif < MM{btc_cross_period} BTC"
-                    st.caption(lbl)
-                st.write("")
-
-                # MACD
-                st.markdown("**〰️ MACD**")
-                use_macd = st.checkbox(
-                    "Haussier" if side == "buy" else "Baissier",
-                    key=f"{key_prefix}_macd"
-                )
-                st.write("")
-
-                # Bollinger
-                st.markdown("**📊 Bollinger**")
-                use_bollinger = st.checkbox("Activer", key=f"{key_prefix}_boll")
-                if use_bollinger:
-                    bollinger_band = st.radio("Bande",
-                                              ["haute", "basse"],
-                                              format_func=lambda x: "Haute 🔴" if x == "haute" else "Basse 🟢",
-                                              key=f"{key_prefix}_boll_band",
-                                              horizontal=True)
-
-            return {
-                "use_rsi":          use_rsi,
-                "rsi_period":       rsi_period,
-                "rsi_threshold":    rsi_threshold,
-                "mm_periods":       mm_selected,
-                "mm_period":        mm_period_sel,
-                "mm_condition":     mm_condition,
-                "mm_cross_a":       mm_cross_a,
-                "mm_cross_b":       mm_cross_b,
-                "btc_cross_period": btc_cross_period,
-                "use_macd":         use_macd,
-                "use_bollinger":    use_bollinger,
-                "bollinger_band":   bollinger_band,
-            }
-
         st.markdown("#### 🟢 Indicateurs d'achat")
         ind_achat = render_indicator_bloc("buy", f"buy_{i}")
 
         st.divider()
 
-        # ── Vente des positions — toujours visible ────────────────────────
-        st.markdown("#### 🔴 Vente des positions")
+        st.markdown("#### 🔴 Indicateurs de vente")
         st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de vente actif** — laisser vide = mode hold")
 
         cv1, cv2 = st.columns(2)
@@ -523,9 +407,14 @@ if st.session_state.results:
             df_with_indicators = st.session_state.df_ohlcv.iloc[-duree_chart:]
 
         trades_slice = {}
-        for sname, trades in all_trades.items():
-            cutoff = df_with_indicators.index[0]
-            trades_slice[sname] = [t for t in trades if t["timestamp"] >= cutoff]
+        for sname, strat_results in all_results.items():
+            # On prend uniquement les trades de la durée affichée — pas de fusion entre durées
+            trades_for_duration = strat_results.get(duree_chart, {}).get("trades", [])
+            if df_with_indicators.index.empty:
+                trades_slice[sname] = []
+            else:
+                cutoff = df_with_indicators.index[0]
+                trades_slice[sname] = [t for t in trades_for_duration if t["timestamp"] >= cutoff]
 
         fig_price = chart_price_trades(
             df_with_indicators,
