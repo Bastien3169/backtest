@@ -7,44 +7,24 @@ Source : yfinance (pas de clé requise).
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import importlib.util
+import os
 from datetime import datetime, timedelta
 
+_COINS_PATH = os.path.join(os.path.dirname(__file__), "coins.py")
 
-# ---------------------------------------------------------------------------
-# Liste des cryptos à screener
-# ---------------------------------------------------------------------------
-SCREENING_COINS = [
-    {"ticker": "BTC-EUR",  "name": "Bitcoin",          "symbol": "BTC"},
-    {"ticker": "ETH-EUR",  "name": "Ethereum",          "symbol": "ETH"},
-    {"ticker": "BNB-EUR",  "name": "BNB",               "symbol": "BNB"},
-    {"ticker": "SOL-EUR",  "name": "Solana",            "symbol": "SOL"},
-    {"ticker": "XRP-EUR",  "name": "XRP",               "symbol": "XRP"},
-    {"ticker": "ADA-EUR",  "name": "Cardano",           "symbol": "ADA"},
-    {"ticker": "AVAX-EUR", "name": "Avalanche",         "symbol": "AVAX"},
-    {"ticker": "DOGE-EUR", "name": "Dogecoin",          "symbol": "DOGE"},
-    {"ticker": "DOT-EUR",  "name": "Polkadot",          "symbol": "DOT"},
-    {"ticker": "LINK-EUR", "name": "Chainlink",         "symbol": "LINK"},
-    {"ticker": "LTC-EUR",  "name": "Litecoin",          "symbol": "LTC"},
-    {"ticker": "UNI-EUR",  "name": "Uniswap",           "symbol": "UNI"},
-    {"ticker": "ATOM-EUR", "name": "Cosmos",            "symbol": "ATOM"},
-    {"ticker": "XLM-EUR",  "name": "Stellar",           "symbol": "XLM"},
-    {"ticker": "NEAR-EUR", "name": "NEAR Protocol",     "symbol": "NEAR"},
-    {"ticker": "OP-EUR",   "name": "Optimism",          "symbol": "OP"},
-    {"ticker": "FIL-EUR",  "name": "Filecoin",          "symbol": "FIL"},
-    {"ticker": "VET-EUR",  "name": "VeChain",           "symbol": "VET"},
-    {"ticker": "ALGO-EUR", "name": "Algorand",          "symbol": "ALGO"},
-    {"ticker": "EOS-EUR",  "name": "EOS",               "symbol": "EOS"},
-    {"ticker": "MATIC-EUR","name": "Polygon",           "symbol": "MATIC"},
-    {"ticker": "ICP-EUR",  "name": "Internet Computer", "symbol": "ICP"},
-    {"ticker": "APT-EUR",  "name": "Aptos",             "symbol": "APT"},
-    {"ticker": "ARB-EUR",  "name": "Arbitrum",          "symbol": "ARB"},
-    {"ticker": "SAND-EUR", "name": "The Sandbox",       "symbol": "SAND"},
-    {"ticker": "MANA-EUR", "name": "Decentraland",      "symbol": "MANA"},
-    {"ticker": "AXS-EUR",  "name": "Axie Infinity",     "symbol": "AXS"},
-    {"ticker": "THETA-EUR","name": "Theta Network",     "symbol": "THETA"},
-    {"ticker": "TRX-EUR",  "name": "TRON",              "symbol": "TRX"},
-    {"ticker": "SHIB-EUR", "name": "Shiba Inu",         "symbol": "SHIB"},
-]
+
+def _load_coins_fresh() -> list[dict]:
+    spec   = importlib.util.spec_from_file_location("coins_fresh", _COINS_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.COINS
+
+
+# Liste des cryptos — importée depuis coins.py (source unique)
+def get_screening_coins() -> list[dict]:
+    coins = _load_coins_fresh()
+    return [{"ticker": c["ticker"], "symbol": c["symbol"], "name": c["name"]} for c in coins]
 
 
 # ---------------------------------------------------------------------------
@@ -176,17 +156,17 @@ def _market_info(ticker: str) -> dict:
 def load_screening_data(progress_cb=None) -> pd.DataFrame:
     """
     Charge toutes les données et retourne un DataFrame prêt à afficher.
-    progress_cb : callable(float, str) pour la barre de progression.
+    Relit coins.py à chaque appel pour refléter les mises à jour.
     """
-    # BTC en premier comme référence
     btc_closes = _fetch_closes("BTC-EUR", days=30)
     if btc_closes is None:
         return pd.DataFrame()
 
-    rows = []
-    total = len(SCREENING_COINS)
+    rows  = []
+    coins = get_screening_coins()
+    total = len(coins)
 
-    for idx, coin in enumerate(SCREENING_COINS):
+    for idx, coin in enumerate(coins):
         if progress_cb:
             progress_cb((idx + 1) / total, f"Chargement {coin['symbol']}...")
 

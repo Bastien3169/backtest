@@ -79,7 +79,19 @@ def chart_price_trades(
         for s in strategies_config:
             for side_key in ("ind_achat", "ind_vente"):
                 cfg = s.get(side_key, {})
-                # MM de référence (prix au-dessus/dessous)
+                # Toutes les MM cochées via mm_configs
+                for period, mcfg in cfg.get("mm_configs", {}).items():
+                    if period not in mm_plotted:
+                        col = f"mm_{period}"
+                        if col in df.columns:
+                            c = mm_colors[len(mm_plotted) % len(mm_colors)]
+                            fig.add_trace(go.Scatter(
+                                x=df.index, y=df[col],
+                                mode="lines", name=f"MM{period}",
+                                line=dict(color=c, width=1, dash="dot"),
+                            ), row=1, col=1)
+                            mm_plotted.add(period)
+                # Fallback mm_period unique
                 mp = cfg.get("mm_period")
                 if mp and mp not in mm_plotted:
                     col = f"mm_{mp}"
