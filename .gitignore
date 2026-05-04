@@ -6,6 +6,11 @@ venv/
 *venv/
 *venv311/
 
+# Variables d'environnement
+.env
+*.env
+
+
 
 # Caches et artefacts
 __pycache__/
