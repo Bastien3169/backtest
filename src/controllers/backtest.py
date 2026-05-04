@@ -34,8 +34,10 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
     all_slopes = {"up", "down", "flat"}
 
     if mm_configs:
-        # Chaque MM cochée génère ses propres conditions (ET entre elles)
         for period, mcfg in mm_configs.items():
+            # Si pas filtre → MM juste affichée, on skip
+            if not mcfg.get("use_as_filter", True):
+                continue
             col = f"mm_{period}"
             if col not in df.columns:
                 continue
@@ -68,6 +70,13 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
                     slope_col = f"mm_{mm_period}_slope"
                     if slope_col in df.columns:
                         conditions.append(df[slope_col].isin(selected_slopes))
+
+    # ── Alignement MM (ordre haussier ou baissier) ────────────────────────
+    mm_align_periods = cfg.get("mm_align_periods", [])
+    if mm_align_periods:
+        col = "mm_aligned_bull" if side == "buy" else "mm_aligned_bear"
+        if col in df.columns:
+            conditions.append(df[col])
 
     # ── Croisement MM A / MM B ────────────────────────────────────────────
     cross_a = cfg.get("mm_cross_a")
@@ -148,11 +157,15 @@ def run_backtest_single(
     btc_mm = btc_mm_achat if btc_mm_achat is not None else btc_mm_vente
 
     ind_merged = {
-        "use_rsi":       bool(ind_achat.get("use_rsi")) or bool(ind_vente.get("use_rsi")),
-        "rsi_period":    ind_achat.get("rsi_period") or ind_vente.get("rsi_period") or 14,
-        "use_macd":      bool(ind_achat.get("use_macd")) or bool(ind_vente.get("use_macd")),
-        "use_bollinger": bool(ind_achat.get("use_bollinger")) or bool(ind_vente.get("use_bollinger")),
-        "btc_mm":        btc_mm,
+        "use_rsi":         bool(ind_achat.get("use_rsi")) or bool(ind_vente.get("use_rsi")),
+        "rsi_period":      ind_achat.get("rsi_period") or ind_vente.get("rsi_period") or 14,
+        "use_macd":        bool(ind_achat.get("use_macd")) or bool(ind_vente.get("use_macd")),
+        "use_bollinger":   bool(ind_achat.get("use_bollinger")) or bool(ind_vente.get("use_bollinger")),
+        "btc_mm":          btc_mm,
+        "mm_align_periods": list(set(
+            ind_achat.get("mm_align_periods", []) +
+            ind_vente.get("mm_align_periods", [])
+        )),
     }
 
     # Calcul indicateurs sur le DF COMPLET
@@ -290,13 +303,27 @@ def run_strategy(
     capital: float,
     frais_pct: float,
     durees: list[int],
-    date_range: tuple | None = None,
+    date_range=None,   # None | tuple(date,date) | list[tuple(date,date)]
 ) -> dict:
+    """
+    Lance le backtest pour toutes les durées.
+    Si date_range est une liste, chaque durée correspond à une plage de dates.
+    """
     results = {}
-    for d in durees:
+    # Normaliser date_range en liste
+    if date_range is None:
+        ranges = [None] * len(durees)
+    elif isinstance(date_range, list):
+        # liste de tuples — une par durée
+        ranges = date_range + [None] * max(0, len(durees) - len(date_range))
+    else:
+        # tuple unique — appliqué à toutes les durées
+        ranges = [date_range] * len(durees)
+
+    for d, dr in zip(durees, ranges):
         results[d] = run_backtest_single(
             df=df, strategy=strategy,
             capital=capital, frais_pct=frais_pct,
-            duree=d, date_range=date_range,
+            duree=d, date_range=dr,
         )
     return results

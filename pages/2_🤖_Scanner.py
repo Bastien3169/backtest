@@ -27,6 +27,9 @@ MM_LABELS = [1, 10, 20, 50, 100, 200]
 st.subheader("1️⃣ Sélection des cryptos")
 
 _coins     = get_top100_coins()
+# Exclure les stablecoins — inutiles à backtester
+_EXCLUDE   = {"USDC", "USDT", "BUSD", "DAI", "TUSD", "FDUSD"}
+_coins     = [c for c in _coins if c["symbol"] not in _EXCLUDE]
 all_labels = [f"{c['symbol']} — {c['name']}" for c in _coins]
 ticker_map = {f"{c['symbol']} — {c['name']}": c["id"] for c in _coins}
 
@@ -57,30 +60,74 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("2️⃣ Paramètres généraux")
 
+from datetime import date, timedelta
+
 pg1, pg2 = st.columns(2)
 with pg1:
-    timeframe = st.selectbox("Temporalité", ["jour", "heure", "semaine", "mois"])
-    mode_duree = st.radio("Mode période", ["Durée fixe", "Plage de dates"], horizontal=True, key="scan_mode_duree")
-    duree      = 360
-    date_range = None
-    if mode_duree == "Durée fixe":
-        duree = st.number_input("Durée (nb bougies)", min_value=5, max_value=2000, value=360)
-    else:
-        from datetime import date, timedelta
-        d1, d2 = st.columns(2)
-        with d1:
-            date_debut = st.date_input("Du", value=date.today() - timedelta(days=360), key="scan_d1")
-        with d2:
-            date_fin = st.date_input("Au", value=date.today(), key="scan_d2")
-        if date_debut < date_fin:
-            date_range = (date_debut, date_fin)
-            duree = (date_fin - date_debut).days
-            st.caption(f"→ {duree} jours")
-        else:
-            st.error("Date début doit être avant date fin")
+    timeframe  = st.selectbox("Temporalité", ["jour", "heure", "semaine", "mois"])
+    mode_duree = st.radio("Mode période",
+                          ["Durées fixes", "Plages de dates"],
+                          horizontal=True, key="scan_mode_duree")
 with pg2:
     capital   = st.number_input("Capital (€)", min_value=1.0, value=1000.0, step=100.0)
     frais_pct = st.number_input("Frais (%)", 0.0, 10.0, 0.1, 0.01, format="%.2f")
+
+durees      = [360]
+date_ranges = []
+
+if mode_duree == "Durées fixes":
+    durees_raw = st.text_input(
+        "Durées (nb bougies, séparées par des virgules)",
+        value="180,360,720",
+        help="Ex : 180,360,720 — chaque valeur = une colonne dans les résultats",
+        key="scan_durees_raw",
+    )
+    try:
+        durees = sorted(set(int(x.strip()) for x in durees_raw.split(",") if x.strip().isdigit()))
+    except Exception:
+        durees = [360]
+else:
+    if "scan_date_ranges" not in st.session_state:
+        st.session_state.scan_date_ranges = [
+            (date.today() - timedelta(days=360), date.today())
+        ]
+
+    col_add, col_clear = st.columns(2)
+    with col_add:
+        if st.button("➕ Ajouter une plage", key="scan_add_range", use_container_width=True):
+            st.session_state.scan_date_ranges.append(
+                (date.today() - timedelta(days=90), date.today())
+            )
+            st.rerun()
+    with col_clear:
+        if st.button("🗑️ Tout effacer", key="scan_clear_range", use_container_width=True):
+            st.session_state.scan_date_ranges = [
+                (date.today() - timedelta(days=360), date.today())
+            ]
+            st.rerun()
+
+    new_ranges = []
+    for idx_r, (d1, d2) in enumerate(st.session_state.scan_date_ranges):
+        st.markdown(f"**Plage {idx_r + 1}**")
+        r1, r2, r3 = st.columns([2, 2, 1])
+        with r1:
+            nd1 = st.date_input("Du", value=d1, key=f"scan_d1_{idx_r}")
+        with r2:
+            nd2 = st.date_input("Au", value=d2, key=f"scan_d2_{idx_r}")
+        with r3:
+            st.write("")
+            if st.button("✕", key=f"scan_del_{idx_r}") and len(st.session_state.scan_date_ranges) > 1:
+                st.session_state.scan_date_ranges.pop(idx_r)
+                st.rerun()
+        if nd1 < nd2:
+            new_ranges.append((nd1, nd2))
+            st.caption(f"→ {(nd2 - nd1).days} jours")
+        else:
+            st.error(f"Plage {idx_r + 1} : date début avant date fin")
+
+    st.session_state.scan_date_ranges = new_ranges
+    date_ranges = new_ranges
+    durees = [max(1, (d2 - d1).days) for d1, d2 in date_ranges]
 
 st.divider()
 
@@ -130,22 +177,28 @@ if st.button("🚀 Lancer le scan", type="primary"):
         prog.progress((idx + 1) / total, text=f"Analyse {ticker} ({idx+1}/{total})...")
 
         try:
-            df  = fetch_ohlcv(ticker, timeframe)
-            res = run_backtest_single(
-                df=df, strategy=strategy,
-                capital=capital, frais_pct=frais_pct, duree=duree,
-                date_range=date_range if mode_duree == "Plage de dates" else None,
-            )
-            results.append({
-                "Crypto":          label,
-                "Rendement (%)":   res["rendement_pct"],
-                "B&H (%)":        res["bnh_rendement"],
-                "Alpha (%)":      round(res["rendement_pct"] - res["bnh_rendement"], 2),
-                "Plus-value (€)": res["plus_value_eur"],
-                "Drawdown (%)":   res["drawdown_max"],
-                "Nb trades":      res["nb_trades"],
-                "Win rate (%)":   res["win_rate"],
-            })
+            df = fetch_ohlcv(ticker, timeframe)
+            row = {"Crypto": label}
+
+            for i, d in enumerate(durees):
+                dr = date_ranges[i] if mode_duree == "Plages de dates" and i < len(date_ranges) else None
+                res = run_backtest_single(
+                    df=df, strategy=strategy,
+                    capital=capital, frais_pct=frais_pct,
+                    duree=d, date_range=dr,
+                )
+                # Label colonne
+                if dr:
+                    col_label = f"{dr[0].strftime('%d/%m/%y')}→{dr[1].strftime('%d/%m/%y')}"
+                else:
+                    col_label = f"{d}j"
+
+                row[f"Rendement {col_label} (%)"] = res["rendement_pct"]
+                row[f"B&H {col_label} (%)"]       = res["bnh_rendement"]
+                row[f"Trades {col_label}"]         = res["nb_trades"]
+                row[f"Win rate {col_label} (%)"]   = res["win_rate"]
+
+            results.append(row)
         except Exception as e:
             errors.append(f"{ticker}: {e}")
 
@@ -157,7 +210,11 @@ if st.button("🚀 Lancer le scan", type="primary"):
                 st.caption(e)
 
     if results:
-        df_res = pd.DataFrame(results).sort_values("Rendement (%)", ascending=False)
+        df_res = pd.DataFrame(results)
+        # Trier par la première colonne de rendement disponible
+        rend_cols = [c for c in df_res.columns if "Rendement" in c]
+        if rend_cols:
+            df_res = df_res.sort_values(rend_cols[0], ascending=False)
         st.session_state["scan_results"] = df_res
         st.success(f"✅ Scan terminé — {len(results)} cryptos analysées")
 
@@ -167,8 +224,12 @@ if st.button("🚀 Lancer le scan", type="primary"):
 if "scan_results" in st.session_state:
     df_res = st.session_state["scan_results"]
 
+    # Colonnes de rendement pour colorisation
+    rend_cols = [c for c in df_res.columns if "Rendement" in c]
+
     sort_col = st.selectbox("Trier par", df_res.columns[1:], index=0, key="scan_sort")
-    asc      = st.radio("Ordre", ["↓ Décroissant", "↑ Croissant"], horizontal=True, key="scan_asc") == "↑ Croissant"
+    asc      = st.radio("Ordre", ["↓ Décroissant", "↑ Croissant"],
+                        horizontal=True, key="scan_asc") == "↑ Croissant"
     df_res   = df_res.sort_values(sort_col, ascending=asc)
 
     def color_val(val):
@@ -176,27 +237,30 @@ if "scan_results" in st.session_state:
             return ""
         return f"color: {'#22C55E' if val > 0 else '#EF4444' if val < 0 else '#888'}"
 
+    # Format numérique pour toutes les colonnes sauf Crypto et Trades
+    fmt_dict = {}
+    for c in df_res.columns:
+        if c == "Crypto":
+            continue
+        elif "Trades" in c:
+            fmt_dict[c] = "{:.0f}"
+        else:
+            fmt_dict[c] = "{:.2f}"
+
     styled = (
         df_res.style
-        .format({
-            "Rendement (%)":   "{:.2f}",
-            "B&H (%)":        "{:.2f}",
-            "Alpha (%)":      "{:.2f}",
-            "Plus-value (€)": "{:.2f}",
-            "Drawdown (%)":   "{:.2f}",
-            "Win rate (%)":   "{:.1f}",
-        })
-        .map(color_val, subset=["Rendement (%)", "Alpha (%)"])
+        .format(fmt_dict)
+        .map(color_val, subset=rend_cols)
     )
     st.dataframe(styled, use_container_width=True, height=600)
 
     st.subheader("🏆 Top 5 — Meilleur rendement")
-    for _, row in df_res.head(5).iterrows():
-        color = "#22C55E" if row["Rendement (%)"] > 0 else "#EF4444"
-        st.markdown(
-            f"**{row['Crypto']}** — "
-            f"<span style='color:{color}'>{row['Rendement (%)']:+.2f}%</span> "
-            f"| Alpha : {row['Alpha (%)']:+.2f}% "
-            f"| {int(row['Nb trades'])} trades",
-            unsafe_allow_html=True,
-        )
+    if rend_cols:
+        top_col = rend_cols[0]
+        for _, row in df_res.nlargest(5, top_col).iterrows():
+            color = "#22C55E" if row[top_col] > 0 else "#EF4444"
+            st.markdown(
+                f"**{row['Crypto']}** — "
+                f"<span style='color:{color}'>{row[top_col]:+.2f}%</span>",
+                unsafe_allow_html=True,
+            )

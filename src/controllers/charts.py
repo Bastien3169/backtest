@@ -115,6 +115,18 @@ def chart_price_trades(
                                 line=dict(color=c, width=1, dash="dot"),
                             ), row=1, col=1)
                             mm_plotted.add(mp2)
+                # MM alignement
+                for mp3 in cfg.get("mm_align_periods", []):
+                    if mp3 and mp3 not in mm_plotted:
+                        col = f"mm_{mp3}"
+                        if col in df.columns:
+                            c = mm_colors[len(mm_plotted) % len(mm_colors)]
+                            fig.add_trace(go.Scatter(
+                                x=df.index, y=df[col],
+                                mode="lines", name=f"MM{mp3} (align)",
+                                line=dict(color=c, width=1.5, dash="dashdot"),
+                            ), row=1, col=1)
+                            mm_plotted.add(mp3)
                 # MM BTC
                 btc_p = cfg.get("btc_cross_period")
                 if btc_p:

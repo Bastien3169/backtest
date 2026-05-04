@@ -90,8 +90,33 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
                 "use_as_filter": use_filter,
             }
 
-    # ── Colonne droite : Cross MM + BTC + MACD + Bollinger ───────────────
+    # ── Colonne droite : Alignement + Cross MM + BTC + MACD + Bollinger ──
     with col_b:
+        # Alignement MM
+        mm_align_periods = []
+        st.markdown("**📐 Alignement MM**")
+        use_align = st.checkbox(
+            "MM alignées haussières" if side == "buy" else "MM alignées baissières",
+            key=f"{key_prefix}_align",
+        )
+        if use_align:
+            align_opts = st.multiselect(
+                "MM à aligner",
+                MM_LABELS,
+                default=[10, 20, 50],
+                key=f"{key_prefix}_align_periods",
+            )
+            mm_align_periods = sorted(align_opts)
+            if side == "buy":
+                if len(mm_align_periods) >= 2:
+                    order = " > ".join([f"MM{p}" for p in mm_align_periods])
+                    st.caption(f"✅ Prix > {order} ET toutes montent ↗")
+            else:
+                if len(mm_align_periods) >= 2:
+                    order = " < ".join([f"MM{p}" for p in mm_align_periods])
+                    st.caption(f"✅ Prix < {order} ET toutes descendent ↘")
+        st.write("")
+
         st.markdown("**🔀 Croisement MM**")
         label_cross = "Golden cross" if side == "buy" else "Death cross"
         use_cross = st.checkbox(label_cross, key=f"{key_prefix}_cross")
@@ -146,6 +171,7 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         "mm_period":        mm_selected[0] if mm_selected else None,
         "mm_condition":     mm_configs[mm_selected[0]]["condition"] if mm_selected else None,
         "mm_slope":         mm_configs[mm_selected[0]]["slope"] if mm_selected else ["up", "down", "flat"],
+        "mm_align_periods": mm_align_periods,
         "mm_cross_a":       mm_cross_a,
         "mm_cross_b":       mm_cross_b,
         "btc_cross_period": btc_cross_period,
