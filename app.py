@@ -50,8 +50,8 @@ if "df_ohlcv" not in st.session_state:
 if "btc_mm_cache" not in st.session_state:
     st.session_state.btc_mm_cache = {}
 
-# coin_list : toujours relue depuis coins.py (pas mise en cache)
-# → se met à jour automatiquement après un coins_updater + redémarrage Streamlit
+# coin_list : relue dynamiquement depuis coins.py à chaque run Streamlit
+# → se met à jour sans redémarrage après un coins_updater
 coin_list = get_top100_coins()
 coin_options = {f"{c['symbol']} — {c['name']}": c["id"] for c in coin_list}
 
@@ -104,12 +104,12 @@ with st.sidebar:
 
     mode_duree = st.radio(
         "Mode de période",
-        ["Durées prédéfinies", "Plage de dates"],
+        ["Durées prédéfinies", "Plages de dates"],
         index=0, horizontal=True,
     )
 
-    durees = [7, 30, 90]
-    date_range = None
+    durees      = [180, 360, 720]
+    date_ranges = []   # liste de (date_debut, date_fin, label)
 
     if mode_duree == "Durées prédéfinies":
         durees_raw = st.text_input(
@@ -120,21 +120,54 @@ with st.sidebar:
         try:
             durees = sorted(set(int(x.strip()) for x in durees_raw.split(",") if x.strip().isdigit()))
         except Exception:
-            durees = [7, 30, 90]
+            durees = [180, 360, 720]
     else:
         from datetime import date, timedelta
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            date_debut = st.date_input("Du", value=date.today() - timedelta(days=90))
-        with col_d2:
-            date_fin = st.date_input("Au", value=date.today())
-        if date_debut < date_fin:
-            date_range = (date_debut, date_fin)
-            delta = (date_fin - date_debut).days
-            durees = [delta]
-            st.caption(f"→ {delta} jours de backtest")
-        else:
-            st.error("La date de début doit être avant la date de fin")
+        if "date_ranges" not in st.session_state:
+            st.session_state.date_ranges = [
+                (date.today() - timedelta(days=360), date.today())
+            ]
+
+        # Ajouter / supprimer des plages
+        col_add, col_clear = st.columns(2)
+        with col_add:
+            if st.button("➕ Ajouter une plage", use_container_width=True):
+                st.session_state.date_ranges.append(
+                    (date.today() - timedelta(days=90), date.today())
+                )
+                st.rerun()
+        with col_clear:
+            if st.button("🗑️ Tout effacer", use_container_width=True):
+                st.session_state.date_ranges = [
+                    (date.today() - timedelta(days=360), date.today())
+                ]
+                st.rerun()
+
+        # Afficher chaque plage
+        new_ranges = []
+        for idx_r, (d1, d2) in enumerate(st.session_state.date_ranges):
+            st.markdown(f"**Plage {idx_r + 1}**")
+            r1, r2, r3 = st.columns([2, 2, 1])
+            with r1:
+                nd1 = st.date_input(f"Du", value=d1, key=f"dr_d1_{idx_r}")
+            with r2:
+                nd2 = st.date_input(f"Au", value=d2, key=f"dr_d2_{idx_r}")
+            with r3:
+                st.write("")
+                if st.button("✕", key=f"dr_del_{idx_r}") and len(st.session_state.date_ranges) > 1:
+                    st.session_state.date_ranges.pop(idx_r)
+                    st.rerun()
+            if nd1 < nd2:
+                new_ranges.append((nd1, nd2))
+                delta = (nd2 - nd1).days
+                st.caption(f"→ {delta} jours")
+            else:
+                st.error(f"Plage {idx_r + 1} : date début doit être avant date fin")
+
+        st.session_state.date_ranges = new_ranges
+        date_ranges = new_ranges
+        # durees = une entrée par plage (utilisé pour les colonnes du tableau)
+        durees = [max(1, (d2 - d1).days) for d1, d2 in date_ranges]
 
     st.divider()
 
@@ -336,7 +369,7 @@ if run_clicked:
             capital=strat["capital"],
             frais_pct=frais_pct,
             durees=durees,
-            date_range=date_range if mode_duree == "Plage de dates" else None,
+            date_range=date_ranges if mode_duree == "Plages de dates" else None,
         )
 
         # ── DEBUG résultats ────────────────────────────────────────────────
@@ -355,10 +388,11 @@ if run_clicked:
         progress.progress((idx + 1) / len(strategies_config), text=f"Calculé : {strat['name']}")
 
     st.session_state.results = {
-        "all_results":      all_results,
-        "all_trades":       all_trades,
-        "durees":           durees,
+        "all_results":       all_results,
+        "all_trades":        all_trades,
+        "durees":            durees,
         "strategies_config": strategies_config,
+        "date_ranges":       date_ranges if mode_duree == "Plages de dates" else None,
     }
     progress.empty()
     st.success("✅ Backtest terminé !")
@@ -377,8 +411,31 @@ if st.session_state.results:
     # Tableau par stratégie
     for name, results in all_results.items():
         st.subheader(f"📋 {name}")
-        table = build_result_table(results, durees)
-        st.dataframe(table.style.format("{:.2f}", na_rep="—"), use_container_width=True)
+        table = build_result_table(
+            results, durees,
+            date_ranges=r.get("date_ranges"),
+        )
+
+        def color_rendement(val):
+            try:
+                v = float(val)
+                if v > 0:
+                    return "color: #22C55E; font-weight: bold"
+                elif v < 0:
+                    return "color: #EF4444; font-weight: bold"
+            except (TypeError, ValueError):
+                pass
+            return ""
+
+        styled = (
+            table.style
+            .format("{:.2f}", na_rep="—")
+            .map(color_rendement, subset=pd.IndexSlice[
+                ["Rendement strat (%)", "Rendement B&H (%)"],
+                :
+            ])
+        )
+        st.dataframe(styled, use_container_width=True)
 
     st.divider()
 
