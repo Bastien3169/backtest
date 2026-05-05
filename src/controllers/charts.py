@@ -155,26 +155,42 @@ def chart_price_trades(
     # ── Points achat / vente ──────────────────────────────────────────────
     for idx, (name, trades) in enumerate(all_trades.items()):
         color = COLORS[idx % len(COLORS)]
-        buys  = [t for t in trades if t["type"] == "buy"]
-        sells = [t for t in trades if t["type"] == "sell"]
+        buys        = [t for t in trades if t["type"] == "buy"]
+        sells       = [t for t in trades if t["type"] == "sell"]
+        short_entry = [t for t in trades if t["type"] == "short_entry"]
+        short_exit  = [t for t in trades if t["type"] == "short_exit"]
+
         if buys:
             fig.add_trace(go.Scatter(
-                x=[t["timestamp"] for t in buys],
-                y=[t["price"] for t in buys],
+                x=[t["timestamp"] for t in buys], y=[t["price"] for t in buys],
                 mode="markers", name=f"{name} — Achat",
                 marker=dict(symbol="triangle-up", size=12, color="lime",
                             line=dict(color="darkgreen", width=1)),
             ), row=1, col=1)
         if sells:
-            reasons = [t.get("reason", "") for t in sells]
             fig.add_trace(go.Scatter(
-                x=[t["timestamp"] for t in sells],
-                y=[t["price"] for t in sells],
+                x=[t["timestamp"] for t in sells], y=[t["price"] for t in sells],
                 mode="markers", name=f"{name} — Vente",
                 marker=dict(symbol="triangle-down", size=12, color="red",
                             line=dict(color="darkred", width=1)),
-                text=reasons,
+                text=[t.get("reason", "") for t in sells],
                 hovertemplate="<b>Vente</b><br>Prix: %{y:.2f}<br>Raison: %{text}<extra></extra>",
+            ), row=1, col=1)
+        if short_entry:
+            fig.add_trace(go.Scatter(
+                x=[t["timestamp"] for t in short_entry], y=[t["price"] for t in short_entry],
+                mode="markers", name=f"{name} — Short entrée",
+                marker=dict(symbol="triangle-down", size=12, color="orange",
+                            line=dict(color="darkorange", width=1)),
+            ), row=1, col=1)
+        if short_exit:
+            fig.add_trace(go.Scatter(
+                x=[t["timestamp"] for t in short_exit], y=[t["price"] for t in short_exit],
+                mode="markers", name=f"{name} — Short sortie",
+                marker=dict(symbol="triangle-up", size=12, color="cyan",
+                            line=dict(color="darkcyan", width=1)),
+                text=[t.get("reason", "") for t in short_exit],
+                hovertemplate="<b>Rachat</b><br>Prix: %{y:.2f}<br>Raison: %{text}<extra></extra>",
             ), row=1, col=1)
 
     current_row = 2
