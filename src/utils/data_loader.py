@@ -29,18 +29,27 @@ PERIOD_MAP = {
 _COINS_PATH = os.path.join(os.path.dirname(__file__), "coins.py")
 
 
-def _load_coins_fresh() -> list[dict]:
-    """Relit coins.py depuis le disque à chaque appel — pas de cache."""
+def _load_coins_fresh() -> tuple[list[dict], list[dict]]:
+    """Relit coins.py depuis le disque — retourne (COINS, INDICES)."""
     spec   = importlib.util.spec_from_file_location("coins_fresh", _COINS_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.COINS
+    coins   = getattr(module, "COINS", [])
+    indices = getattr(module, "INDICES", [])
+    return coins, indices
 
 
 def get_top100_coins() -> list[dict]:
-    """Retourne la liste fraîche des cryptos sous le format attendu par app.py."""
-    coins = _load_coins_fresh()
+    """Cryptos uniquement — pour le dropdown app.py et le screener."""
+    coins, _ = _load_coins_fresh()
     return [{"id": c["ticker"], "symbol": c["symbol"], "name": c["name"]} for c in coins]
+
+
+def get_all_assets() -> list[dict]:
+    """Cryptos + indices — pour le backtest app.py dropdown complet."""
+    coins, indices = _load_coins_fresh()
+    all_assets = coins + indices
+    return [{"id": c["ticker"], "symbol": c["symbol"], "name": c["name"]} for c in all_assets]
 
 
 def fetch_ohlcv(coin_id: str, timeframe: str, duree_max_jours: int = 365) -> pd.DataFrame:

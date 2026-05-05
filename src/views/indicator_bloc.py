@@ -90,11 +90,12 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         use_bollinger = st.checkbox("Activer", key=f"{key_prefix}_boll")
         if use_bollinger:
             bollinger_band = st.radio(
-                "Bande",
+                "Franchissement",
                 ["haute", "basse"],
-                format_func=lambda x: "Haute 🔴" if x == "haute" else "Basse 🟢",
+                format_func=lambda x: "↗ Bande haute (breakout)" if x == "haute" else "↘ Bande basse (breakdown)",
                 key=f"{key_prefix}_boll_band",
                 horizontal=True)
+            st.caption("Signal = prix **franchit** la bande (1 bougie), pas seulement qu'il est au-dessus/dessous")
 
     st.write("")
 

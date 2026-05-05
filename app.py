@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
 import pandas as pd
 
-from src.utils.data_loader import get_top100_coins, fetch_ohlcv, fetch_btc_mm
+from src.utils.data_loader import get_top100_coins, get_all_assets, fetch_ohlcv, fetch_btc_mm
 from src.controllers.backtest import run_strategy
 from src.controllers.results import build_result_table, build_comparison_table
 from src.controllers.charts import (
@@ -50,9 +50,8 @@ if "df_ohlcv" not in st.session_state:
 if "btc_mm_cache" not in st.session_state:
     st.session_state.btc_mm_cache = {}
 
-# coin_list : relue dynamiquement depuis coins.py à chaque run Streamlit
-# → se met à jour sans redémarrage après un coins_updater
-coin_list = get_top100_coins()
+# coin_list : cryptos + indices, relue dynamiquement depuis coins.py à chaque run
+coin_list = get_all_assets()
 coin_options = {f"{c['symbol']} — {c['name']}": c["id"] for c in coin_list}
 
 # ---------------------------------------------------------------------------
@@ -220,6 +219,19 @@ for i, strat in enumerate(st.session_state.strategies):
                 st.session_state.strategies.pop(i)
                 st.rerun()
 
+        # ── Mode Long / Short ─────────────────────────────────────────────
+        is_short = st.radio(
+            "Direction",
+            ["🟢 Long", "🔴 Short"],
+            horizontal=True,
+            key=f"direction_{i}",
+        ) == "🔴 Short"
+
+        if is_short:
+            st.info("🔴 **Mode Short** — tu vends à découvert en espérant racheter moins cher. "
+                    "Le signal d'entrée déclenche la vente, le signal de sortie le rachat. "
+                    "Le B&H affiché est un S&H (Short & Hold).")
+
         # ── Capital / Allocation ──────────────────────────────────────────
         if mode_capital == "Capital partagé":
             alloc_pct = st.slider(
@@ -246,12 +258,15 @@ for i, strat in enumerate(st.session_state.strategies):
         st.divider()
 
         # ── Indicateurs ───────────────────────────────────────────────────
-        st.markdown("#### 🟢 Indicateurs d'achat")
-        ind_achat = render_indicator_bloc("buy", f"buy_{i}")
+        label_entry = "🟢 Indicateurs d'achat" if not is_short else "🔴 Indicateurs d'entrée short (vente à découvert)"
+        label_exit  = "🔴 Indicateurs de vente" if not is_short else "🟢 Indicateurs de sortie short (rachat)"
+
+        st.markdown(f"#### {label_entry}")
+        ind_achat = render_indicator_bloc("buy" if not is_short else "sell", f"buy_{i}")
 
         st.divider()
 
-        st.markdown("#### 🔴 Indicateurs de vente")
+        st.markdown(f"#### {label_exit}")
         st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de vente actif** — laisser vide = mode hold")
 
         cv1, cv2 = st.columns(2)
@@ -265,21 +280,22 @@ for i, strat in enumerate(st.session_state.strategies):
         tp_pct = tp_pct if tp_pct > 0 else None
         sl_pct = sl_pct if sl_pct > 0 else None
 
-        ind_vente = render_indicator_bloc("sell", f"sell_{i}")
+        ind_vente = render_indicator_bloc("sell" if not is_short else "buy", f"sell_{i}")
 
-        # La vente est active si TP, SL ou au moins un indicateur vente est coché
         has_sell = (tp_pct is not None or sl_pct is not None or
                     any([ind_vente.get("use_rsi"), ind_vente.get("mm_period"),
                          ind_vente.get("mm_cross_a"), ind_vente.get("use_macd"),
-                         ind_vente.get("use_bollinger"), ind_vente.get("btc_cross_period")]))
+                         ind_vente.get("use_bollinger"), ind_vente.get("btc_cross_period"),
+                         ind_vente.get("mm_align_periods")]))
         if not has_sell:
-            st.caption("ℹ️ Aucun critère de vente → mode **hold** jusqu'à la fin de la période")
+            label_hold = "mode **hold** jusqu'à la fin" if not is_short else "**short ouvert** jusqu'à la fin"
+            st.caption(f"ℹ️ Aucun critère de sortie → {label_hold} de la période")
 
-        # ── Assemblage config stratégie ───────────────────────────────────
         strategies_config.append({
             "name":      name,
             "capital":   capital_strat,
             "alloc_pct": alloc_pct,
+            "is_short":  is_short,
             "ind_achat": ind_achat,
             "ind_vente": ind_vente,
             "tp_pct":    tp_pct,
@@ -318,8 +334,9 @@ with st.sidebar:
     show_debug = st.radio("Mode debug", ["Masqué", "Visible"], index=0, horizontal=True) == "Visible"
 
 if run_clicked:
-    all_results = {}
-    all_trades = {}
+    all_results      = {}
+    all_trades       = {}
+    all_results_meta = {}  # {name: {"is_short": bool}}
 
     # ── DEBUG ──────────────────────────────────────────────────────────────
     if show_debug:
@@ -382,6 +399,7 @@ if run_clicked:
         # ── FIN DEBUG ──────────────────────────────────────────────────────
 
         all_results[strat["name"]] = res
+        all_results_meta[strat["name"]] = {"is_short": strat.get("is_short", False)}
         all_trades[strat["name"]] = [
             t for d in durees for t in res.get(d, {}).get("trades", [])
         ]
@@ -389,6 +407,7 @@ if run_clicked:
 
     st.session_state.results = {
         "all_results":       all_results,
+        "all_results_meta":  all_results_meta,
         "all_trades":        all_trades,
         "durees":            durees,
         "strategies_config": strategies_config,
@@ -402,8 +421,9 @@ if run_clicked:
 # ---------------------------------------------------------------------------
 if st.session_state.results:
     r = st.session_state.results
-    all_results = r["all_results"]
-    all_trades = r["all_trades"]
+    all_results      = r["all_results"]
+    all_results_meta = r.get("all_results_meta", {})
+    all_trades       = r["all_trades"]
     durees = r["durees"]
 
     st.header("📊 Résultats")
@@ -414,6 +434,7 @@ if st.session_state.results:
         table = build_result_table(
             results, durees,
             date_ranges=r.get("date_ranges"),
+            is_short=all_results_meta.get(name, {}).get("is_short", False),
         )
 
         def color_rendement(val):
@@ -427,13 +448,15 @@ if st.session_state.results:
                 pass
             return ""
 
+        rend_rows = ["Rendement strat (%)"]
+        for lbl in ["Rendement B&H (%)", "Rendement S&H (%)"]:
+            if lbl in table.index:
+                rend_rows.append(lbl)
+
         styled = (
             table.style
             .format("{:.2f}", na_rep="—")
-            .map(color_rendement, subset=pd.IndexSlice[
-                ["Rendement strat (%)", "Rendement B&H (%)"],
-                :
-            ])
+            .map(color_rendement, subset=pd.IndexSlice[rend_rows, :])
         )
         st.dataframe(styled, use_container_width=True)
 
@@ -443,7 +466,23 @@ if st.session_state.results:
     if len(all_results) > 1:
         st.subheader("⚖️ Comparaison globale")
         comp = build_comparison_table(all_results, durees)
-        st.dataframe(comp.style.format("{:.2f}", na_rep="—"), use_container_width=True)
+
+        def color_comp(val):
+            try:
+                v = float(val)
+                if v > 0:   return "color: #22C55E; font-weight: bold"
+                elif v < 0: return "color: #EF4444; font-weight: bold"
+            except (TypeError, ValueError):
+                pass
+            return ""
+
+        rend_comp_cols = [c for c in comp.columns if "Rendement" in c or "B&H" in c or "S&H" in c]
+        styled_comp = (
+            comp.style
+            .format("{:.2f}", na_rep="—")
+            .map(color_comp, subset=rend_comp_cols)
+        )
+        st.dataframe(styled_comp, use_container_width=True)
         st.divider()
 
     # ── Graphiques ────────────────────────────────────────────────────────

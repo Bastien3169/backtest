@@ -11,47 +11,55 @@ if _ROOT not in sys.path:
 import streamlit as st
 import pandas as pd
 
-from src.utils.data_loader import fetch_ohlcv, get_top100_coins
+from src.utils.data_loader import fetch_ohlcv, get_all_assets
 from src.controllers.backtest import run_backtest_single
 from src.views.indicator_bloc import render_indicator_bloc
 
 st.set_page_config(page_title="Scanner", page_icon="🤖", layout="wide")
-st.title("🤖 Scanner — Stratégie sur une sélection de cryptos")
-st.caption("Configure une stratégie, choisis tes cryptos, lance le scan et compare les résultats.")
+st.title("🤖 Scanner — Cryptos & Indices")
+st.caption("Configure une stratégie, choisis tes actifs, compare les résultats.")
 
 MM_LABELS = [1, 10, 20, 50, 100, 200]
 
 # ---------------------------------------------------------------------------
-# Sélection des cryptos — relecture fraîche de coins.py à chaque run
+# Sélection des actifs
 # ---------------------------------------------------------------------------
-st.subheader("1️⃣ Sélection des cryptos")
+st.subheader("1️⃣ Sélection des actifs")
 
-_coins     = get_top100_coins()
-# Exclure les stablecoins — inutiles à backtester
-_EXCLUDE   = {"USDC", "USDT", "BUSD", "DAI", "TUSD", "FDUSD"}
-_coins     = [c for c in _coins if c["symbol"] not in _EXCLUDE]
-all_labels = [f"{c['symbol']} — {c['name']}" for c in _coins]
-ticker_map = {f"{c['symbol']} — {c['name']}": c["id"] for c in _coins}
+_EXCLUDE = {"USDC", "USDT", "BUSD", "DAI", "TUSD", "FDUSD"}
+_all     = [c for c in get_all_assets() if c["symbol"] not in _EXCLUDE]
+_cryptos = [c for c in _all if not c["id"].startswith("^")]
+_indices = [c for c in _all if c["id"].startswith("^")]
+
+crypto_labels = [f"{c['symbol']} — {c['name']}" for c in _cryptos]
+index_labels  = [f"{c['symbol']} — {c['name']}" for c in _indices]
+all_labels    = crypto_labels + index_labels
+ticker_map    = {f"{c['symbol']} — {c['name']}": c["id"] for c in _all}
 
 col_sel1, col_sel2 = st.columns([3, 1])
 with col_sel2:
-    select_all = st.checkbox("Tout sélectionner", value=False)
+    select_all   = st.checkbox("Tout sélectionner", value=False)
+    show_indices = st.checkbox("Inclure indices", value=True)
 
 with col_sel1:
-    default = all_labels if select_all else all_labels[:10]
+    available = all_labels if show_indices else crypto_labels
+    if select_all:
+        default = available
+    else:
+        default = crypto_labels[:10] + (index_labels if show_indices else [])
+    default = [d for d in default if d in available]
     selected_labels = st.multiselect(
-        "Cryptos à analyser",
-        options=all_labels,
+        "Actifs à analyser",
+        options=available,
         default=default,
-        help="Sélectionne les cryptos à inclure dans le scan",
     )
 
 if not selected_labels:
-    st.warning("Sélectionne au moins une crypto.")
+    st.warning("Sélectionne au moins un actif.")
     st.stop()
 
 selected_tickers = [(label, ticker_map[label]) for label in selected_labels]
-st.caption(f"{len(selected_tickers)} crypto(s) sélectionnée(s)")
+st.caption(f"{len(selected_tickers)} actif(s) sélectionné(s)")
 
 st.divider()
 
