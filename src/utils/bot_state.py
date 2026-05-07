@@ -8,10 +8,10 @@ import json
 import os
 from datetime import datetime
 
-STATE_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "bot_state.json"
-)
+# Sur Railway avec volume : DATA_DIR = /app/data (variable d'env Railway)
+# En local : fichier à la racine du projet (là où tu lances python)
+_ROOT      = os.getenv("DATA_DIR", ".")
+STATE_FILE = os.path.join(_ROOT, "bot_state.json")
 
 DEFAULT_STATE = {
     "status":      "stopped",   # "stopped" | "running"

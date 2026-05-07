@@ -9,6 +9,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
+from datetime import date, timedelta
 import pandas as pd
 
 from src.utils.data_loader import get_top100_coins, get_all_assets, fetch_ohlcv, fetch_btc_mm
@@ -121,7 +122,6 @@ with st.sidebar:
         except Exception:
             durees = [180, 360, 720]
     else:
-        from datetime import date, timedelta
         if "date_ranges" not in st.session_state:
             st.session_state.date_ranges = [
                 (date.today() - timedelta(days=360), date.today())
