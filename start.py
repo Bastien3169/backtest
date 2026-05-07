@@ -10,6 +10,20 @@ import json
 import time
 import subprocess
 
+# os.path.abspath(__file__) = chemin complet de start.py
+# ex: /app/code/start.py
+#
+# os.path.dirname(...) = prend juste le dossier parent
+# ex: /app/code/
+#
+# os.chdir(...) = "cd" en terminal — force Python à travailler depuis ce dossier
+# Sans ça, Railway peut lancer bot_local.py et Streamlit depuis des dossiers
+# différents → bot_state.json créé à des endroits différents → Streamlit
+# ne voit pas les logs du bot
+#
+# En résumé : tout le monde travaille depuis le même dossier = même bot_state.json
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 
 def get_bot_file() -> str:
     """Retourne le fichier bot à lancer selon bot_state.json."""
@@ -28,7 +42,7 @@ def get_bot_file() -> str:
 
 
 def start_services():
-    port     = os.getenv("PORT", "8501") # Port automatuqment donné par Railway, ou 8501 par défaut
+    port     = os.getenv("PORT", "8501")
     bot_file = get_bot_file()
 
     print(f"[start.py] Lancement bot : {bot_file}")
