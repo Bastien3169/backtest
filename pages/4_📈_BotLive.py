@@ -127,6 +127,30 @@ with cfg3:
     tp_pct = tp_pct if tp_pct > 0 else None
     sl_pct = sl_pct if sl_pct > 0 else None
 
+    st.markdown("**⏱️ Timing du check**")
+    timing_mode = st.radio(
+        "Mode",
+        ["Intervalle (minutes)", "Heure fixe UTC"],
+        horizontal=True,
+        key="bot_timing_mode",
+    )
+    check_time_utc = None
+    interval_min   = None
+    if timing_mode == "Heure fixe UTC":
+        check_time_utc = st.text_input(
+            "Heure UTC (HH:MM)",
+            value="00:01",
+            help="Le bot se déclenche chaque jour à cette heure UTC. "
+                 "France = UTC+1 en hiver, UTC+2 en été. "
+                 "00:01 UTC = 01:01 en hiver / 02:01 en été en France.",
+        )
+        st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été (heure française)")
+    else:
+        interval_min = st.number_input(
+            "Intervalle (minutes)", 1, 1440, 15, 1,
+            help="Le bot vérifie toutes les X minutes",
+        )
+
 st.divider()
 
 # ── Bloc indicateurs — même présentation que app.py ──────────────────────
@@ -162,14 +186,16 @@ with c1:
             new_state["balance"]      = capital
             new_state["balance_init"] = capital
         new_state["strategy"] = {
-            "symbol":    symbol,
-            "timeframe": timeframe,
-            "size_pct":  size_pct,
-            "tp_pct":    tp_pct,
-            "sl_pct":    sl_pct,
-            "is_short":  is_short,
-            "ind_entry": ind_entry,
-            "ind_exit":  ind_exit,
+            "symbol":         symbol,
+            "timeframe":      timeframe,
+            "size_pct":       size_pct,
+            "tp_pct":         tp_pct,
+            "sl_pct":         sl_pct,
+            "is_short":       is_short,
+            "check_time_utc": check_time_utc,   # heure UTC fixe ex: "00:01"
+            "interval_min":   interval_min,      # intervalle en minutes
+            "ind_entry":      ind_entry,
+            "ind_exit":       ind_exit,
         }
         save_state(new_state)
 
@@ -211,7 +237,23 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("4️⃣ Monitoring")
 
+# Sélecteur de bot à monitorer
+import glob as _glob
+_data_dir  = os.getenv("DATA_DIR", os.path.abspath("."))
+_json_files = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
+_json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state.json"]
+_selected_json = st.selectbox("📂 Bot à monitorer", _json_labels, index=0)
+
+import src.utils.bot_state as _bs_module
+_bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
+
 state = get_state()
+
+# Debug — voir le chemin du fichier et son contenu brut
+import src.utils.bot_state as _bs
+with st.expander("🔍 Debug — bot_state.json", expanded=False):
+    st.caption(f"Chemin fichier : `{_bs.STATE_FILE}`")
+    st.json(state)
 
 stat_col, pos_col, pnl_col = st.columns(3)
 

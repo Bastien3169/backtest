@@ -1,7 +1,10 @@
 """
 start.py
-Lance Streamlit ET le bot dans le même process Railway.
-Redémarre automatiquement l'un ou l'autre si crash.
+Lance Streamlit + les bots configurés dans bots_config.json.
+La liste des bots actifs est gérée depuis Streamlit (page BotLive).
+Redémarre automatiquement si crash.
+
+Sur Railway : Start Command = python start.py
 """
 
 import os
@@ -10,44 +13,70 @@ import json
 import time
 import subprocess
 
-# os.path.abspath(__file__) = chemin complet de start.py
-# ex: /app/code/start.py
-#
-# os.path.dirname(...) = prend juste le dossier parent
-# ex: /app/code/
-#
-# os.chdir(...) = "cd" en terminal — force Python à travailler depuis ce dossier
-# Sans ça, Railway peut lancer bot_local.py et Streamlit depuis des dossiers
-# différents → bot_state.json créé à des endroits différents → Streamlit
-# ne voit pas les logs du bot
-#
-# En résumé : tout le monde travaille depuis le même dossier = même bot_state.json
+# Force tout le monde à travailler depuis le même dossier
+# = dossier où se trouve start.py
+# Sans ça, bot_local et Streamlit peuvent avoir des dossiers courants différents
+# et ne pas lire le même bot_state.json
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+BOTS_CONFIG_FILE = os.path.join(os.getenv("DATA_DIR", "."), "bots_config.json")
 
-def get_bot_file() -> str:
-    """Retourne le fichier bot à lancer selon bot_state.json."""
+DEFAULT_BOTS = [
+    {"bot_file": "bot_local.py",   "config": "bot_state_local_long.json",    "active": True},
+    {"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
+    # Décommenter quand tu as les clés API Binance testnet
+    # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_long.json",  "active": False},
+    # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_short.json", "active": False},
+    # Décommenter seulement quand tu es prêt pour le vrai argent
+    # {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_long.json",  "active": False},
+    # {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_short.json", "active": False},
+]
+
+
+def read_bots_config() -> list:
+    """Lit la liste des bots depuis bots_config.json."""
     try:
-        with open("bot_state.json") as f:
-            state = json.load(f)
-        mode = state.get("mode", "local")
+        with open(BOTS_CONFIG_FILE) as f:
+            return json.load(f).get("bots", DEFAULT_BOTS)
     except Exception:
-        mode = "local"
+        return DEFAULT_BOTS
 
-    return {
-        "local":   "bot_local.py",
-        "testnet": "bot_testnet.py",
-        "mainnet": "bot_mainnet.py",
-    }.get(mode, "bot_local.py")
+
+def write_bots_config(bots: list):
+    """Écrit la liste des bots dans bots_config.json."""
+    with open(BOTS_CONFIG_FILE, "w") as f:
+        json.dump({"bots": bots}, f, indent=2)
+
+
+def init_files():
+    """Crée les fichiers manquants au démarrage."""
+    # Créer bots_config.json si absent
+    if not os.path.exists(BOTS_CONFIG_FILE):
+        write_bots_config(DEFAULT_BOTS)
+        print(f"[start.py] bots_config.json créé")
+
+    # Créer les fichiers JSON d'état manquants
+    data_dir = os.getenv("DATA_DIR", ".")
+    default_state = {
+        "status": "stopped", "mode": "local", "position": None,
+        "balance": 1000.0, "balance_init": 1000.0, "trades": [],
+        "log": [], "strategy": {}, "last_check": None,
+        "last_price": None, "pnl_session": 0.0,
+    }
+    for bot in DEFAULT_BOTS:
+        path = os.path.join(data_dir, bot["config"])
+        if not os.path.exists(path):
+            with open(path, "w") as f:
+                json.dump(default_state, f, indent=2)
+            print(f"[start.py] {bot['config']} créé")
 
 
 def start_services():
-    port     = os.getenv("PORT", "8501")
-    bot_file = get_bot_file()
+    port = os.getenv("PORT", "8501")
 
-    print(f"[start.py] Lancement bot : {bot_file}")
-    bot_process = subprocess.Popen([sys.executable, bot_file])
+    init_files()
 
+    # Lancer Streamlit
     print(f"[start.py] Lancement Streamlit sur port {port}")
     streamlit_process = subprocess.Popen([
         sys.executable, "-m", "streamlit", "run", "app.py",
@@ -56,14 +85,37 @@ def start_services():
         "--server.headless", "true",
     ])
 
-    while True:
-        # Redémarrer le bot si crash
-        if bot_process.poll() is not None:
-            bot_file = get_bot_file()   # re-lire le mode au cas où il a changé
-            print(f"[start.py] ⚠️ Bot crashé — relancement {bot_file}...")
-            bot_process = subprocess.Popen([sys.executable, bot_file])
+    # Dictionnaire des process actifs {config: process}
+    active_processes = {}
 
-        # Redémarrer Streamlit si crash
+    while True:
+        # Relire la config à chaque cycle
+        bots = read_bots_config()
+
+        # Arrêter les bots devenus inactifs
+        for config, proc in list(active_processes.items()):
+            bot_cfg = next((b for b in bots if b["config"] == config), None)
+            if not bot_cfg or not bot_cfg.get("active"):
+                print(f"[start.py] Arrêt {config}...")
+                proc.terminate()
+                del active_processes[config]
+
+        # Démarrer les nouveaux bots actifs
+        for bot_cfg in bots:
+            if not bot_cfg.get("active"):
+                continue
+            config = bot_cfg["config"]
+            if config not in active_processes or active_processes[config].poll() is not None:
+                if config in active_processes:
+                    print(f"[start.py] ⚠️ {config} crashé — relancement...")
+                else:
+                    print(f"[start.py] Lancement {bot_cfg['bot_file']} --config {config}")
+                active_processes[config] = subprocess.Popen([
+                    sys.executable, bot_cfg["bot_file"],
+                    "--config", config
+                ])
+
+        # Vérifier Streamlit
         if streamlit_process.poll() is not None:
             print("[start.py] ⚠️ Streamlit crashé — relancement...")
             streamlit_process = subprocess.Popen([

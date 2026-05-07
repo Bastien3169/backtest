@@ -13,30 +13,41 @@ Prérequis :
 Lancement : python bot_testnet.py
 """
 
-import sys, os, time
+import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime
-from src.utils.bot_state import get_state, save_state, log
+from src.utils import bot_state as _bs
+import argparse as _ap
+
+# Support --config pour lancer plusieurs bots en parallèle
+# Exemple : python bot_testnet.py --config bot_state_testnet_long.json
+_parser = _ap.ArgumentParser()
+_parser.add_argument("--config", default="bot_state.json")
+_args, _ = _parser.parse_known_args()
+_bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), _args.config)
+
+# Préfixe pour les logs — identifie quel bot écrit
+# ex: "bot_state_testnet_long.json" → "[TESTNET-LONG]"
+_config_name = _args.config.replace("bot_state_", "").replace(".json", "").upper()
+BOT_PREFIX   = f"[{_config_name}]"
+
+get_state  = _bs.get_state
+save_state = _bs.save_state
+log        = _bs.log
+from src.utils.bot_state import
+from src.utils.bot_report import generate as generate_report
 from src.utils.binance_client import BinanceClient
 from src.controllers.indicators import apply_all_indicators
 from src.controllers.backtest import _build_signal
 
-SLEEP_MAP = {
-    "1m": 60, "5m": 300, "15m": 900,
-    "1h": 1800, "4h": 7200, "1d": 43200,
-}
-
 
 def run():
-    log("🤖 Bot TESTNET démarré")
-    client = BinanceClient(testnet=True)
+    log(f"{BOT_PREFIX} 🤖 Bot TESTNET démarré")
 
-    res = client.test_connection()
-    if not res["ok"]:
-        log(f"❌ Connexion Binance testnet impossible : {res['message']}")
-        return
-    log(res["message"])
+    # Client initialisé dans la boucle — pas au démarrage
+    # Si les clés manquent, le bot attend sans crasher
+    client = None
 
     while True:
         try:
@@ -47,7 +58,22 @@ def run():
                 time.sleep(10)
                 continue
 
+            # Connexion Binance seulement quand status=running
+            if client is None:
+                client = BinanceClient(testnet=True)
+                res = client.test_connection()
+                if not res["ok"]:
+                    log(f"{BOT_PREFIX} ⚠️ Connexion impossible : {res['message']} — réessai dans 60s")
+                    client = None
+                    time.sleep(60)
+                    continue
+                log(f"{BOT_PREFIX} {res['message']}")
+
             cfg       = state.get("strategy", {})
+
+            # Log de démarrage avec toutes les infos — affiché une fois par cycle
+            log_startup(BOT_PREFIX, state)
+
             symbol    = cfg.get("symbol",    "BTCUSDT")
             timeframe = cfg.get("timeframe", "1h")
             tp_pct    = cfg.get("tp_pct")
@@ -60,21 +86,18 @@ def run():
             # ── 1. Bougies depuis Binance ──────────────────────────────────
             df = client.get_klines(symbol, timeframe, limit=300)
             if df.empty or len(df) < 3:
-                log(f"⚠️ Données insuffisantes pour {symbol}")
+                log(f"{BOT_PREFIX} ⚠️ Données insuffisantes pour {symbol}")
                 time.sleep(60)
                 continue
 
             # ── 2. Indicateurs ─────────────────────────────────────────────
             ind_merged = {
                 "use_rsi":          ind_entry.get("use_rsi", False) or ind_exit.get("use_rsi", False),
-                "rsi_period":       ind_entry.get("rsi_period") or ind_exit.get("rsi_period") or 14,
+                "rsi_period":       ind_entry.get("rsi_period", 14),
                 "use_macd":         ind_entry.get("use_macd", False) or ind_exit.get("use_macd", False),
                 "use_bollinger":    ind_entry.get("use_bollinger", False) or ind_exit.get("use_bollinger", False),
                 "btc_mm":           None,
-                "mm_align_periods": list(set(
-                    ind_entry.get("mm_align_periods", []) +
-                    ind_exit.get("mm_align_periods", [])
-                )),
+                "mm_align_periods": ind_entry.get("mm_align_periods", []),
             }
             df_ind = apply_all_indicators(df, ind_merged)
 
@@ -106,7 +129,7 @@ def run():
             if pos is None and entry_signal:
                 balance = client.get_balance("USDT")
                 if balance < 10:
-                    log("⚠️ Solde USDT insuffisant")
+                    log(f"{BOT_PREFIX} {BOT_PREFIX} ⚠️ Solde USDT insuffisant")
                 else:
                     size = balance * (size_pct / 100)
                     qty  = round(size / exec_price, 6)
@@ -122,40 +145,27 @@ def run():
                             "size_usdt":   size,
                             "ts":          datetime.now().isoformat(),
                         }
-                        log(f"✅ LONG ouvert @ {fill:.4f} | Qty: {qty}")
+                        log(f"{BOT_PREFIX} ✅ LONG ouvert @ {fill:.4f} | Qty: {qty}")
                     else:
-                        log(f"❌ Ordre achat échoué : {res}")
+                        log(f"{BOT_PREFIX} ❌ Ordre achat échoué : {res}")
 
             # ── 6. Sortie ──────────────────────────────────────────────────
             elif pos is not None:
                 entry = pos["entry_price"]
 
-                if not is_short:
-                    tp_price = entry * (1 + tp_pct / 100) if tp_pct else None
-                    sl_price = entry * (1 - sl_pct / 100) if sl_pct else None
-                else:
-                    tp_price = entry * (1 - tp_pct / 100) if tp_pct else None
-                    sl_price = entry * (1 + sl_pct / 100) if sl_pct else None
+                tp_price = entry * (1 + tp_pct / 100) if tp_pct else None
+                sl_price = entry * (1 - sl_pct / 100) if sl_pct else None
 
                 should_exit = False
                 exit_reason = ""
 
-                if not is_short:
-                    if sl_price and low_t1 <= sl_price:
-                        should_exit = True
-                        exit_reason = "SL"
-                    elif tp_price and high_t1 >= tp_price:
-                        should_exit = True
-                        exit_reason = "TP"
-                else:
-                    if sl_price and high_t1 >= sl_price:
-                        should_exit = True
-                        exit_reason = "SL"
-                    elif tp_price and low_t1 <= tp_price:
-                        should_exit = True
-                        exit_reason = "TP"
-
-                if exit_signal and not should_exit:
+                if sl_price and low_t1 <= sl_price:
+                    should_exit = True
+                    exit_reason = "SL"
+                elif tp_price and high_t1 >= tp_price:
+                    should_exit = True
+                    exit_reason = "TP"
+                elif exit_signal:
                     should_exit = True
                     exit_reason = "Signal sortie"
 
@@ -163,8 +173,8 @@ def run():
                     res = client.sell(symbol, pos["qty"])
                     if res and res["ok"]:
                         fill    = res.get("fill_price") or exec_price
-                        pnl_pct = (fill - entry) / entry * 100 if not is_short else (entry - fill) / entry * 100
-                        pnl_usd = round((fill - entry) * pos["qty"], 2) if not is_short else round((entry - fill) * pos["qty"], 2)
+                        pnl_pct = (fill - entry) / entry * 100
+                        pnl_usd = round((fill - entry) * pos["qty"], 2)
                         trade   = {
                             "ts":          datetime.now().isoformat(),
                             "symbol":      symbol,
@@ -179,20 +189,22 @@ def run():
                         state["trades"].append(trade)
                         state["pnl_session"] = sum(t.get("pnl_usd", 0) for t in state["trades"])
                         state["position"]    = None
-                        log(f"🔴 Position fermée : {exit_reason} @ {fill:.4f} | PnL: {pnl_usd:+.2f}$")
+                        log(f"{BOT_PREFIX} 🔴 Position fermée : {exit_reason} @ {fill:.4f} | PnL: {pnl_usd:+.2f}$")
                     else:
-                        log(f"❌ Ordre vente échoué : {res}")
+                        log(f"{BOT_PREFIX} ❌ Ordre vente échoué : {res}")
 
             save_state(state)
 
             sleep = SLEEP_MAP.get(timeframe, 1800)
-            time.sleep(max(60, sleep // 2))
+            check_time_utc = cfg.get("check_time_utc")
+            interval_min   = cfg.get("interval_min")
+            wait_until_next_check(timeframe, check_time_utc, interval_min)
 
         except KeyboardInterrupt:
-            log("Bot TESTNET arrêté (Ctrl+C)")
+            log(f"{BOT_PREFIX} {BOT_PREFIX} Bot TESTNET arrêté (Ctrl+C)")
             break
         except Exception as e:
-            log(f"⚠️ Erreur : {e}")
+            log(f"{BOT_PREFIX} ⚠️ Erreur : {e}")
             time.sleep(60)
 
 
