@@ -16,43 +16,149 @@ Prérequis :
 Lancement : python bot_mainnet.py
 """
 
-import sys, os, time
+import sys, os, time, argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime
-from src.utils.bot_state import get_state, save_state, log
+from src.utils import bot_state as _bs
+import argparse as _ap
+
+# Support --config pour lancer plusieurs bots en parallèle
+# Exemple : python bot_testnet.py --config bot_state_testnet_long.json
+_parser = _ap.ArgumentParser()
+_parser.add_argument("--config", default="bot_state.json")
+_args, _ = _parser.parse_known_args()
+_bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), _args.config)
+
+# Préfixe pour les logs — identifie quel bot écrit
+# ex: "bot_state_testnet_long.json" → "[TESTNET-LONG]"
+_config_name = _args.config.replace("bot_state_", "").replace(".json", "").upper()
+BOT_PREFIX   = f"[{_config_name}]"
+
+get_state  = _bs.get_state
+save_state = _bs.save_state
+log        = _bs.log
+# ---------------------------------------------------------------------------
+# Fonctions de timing et de log — dupliquées dans chaque bot volontairement
+# (plus simple à lire qu'un fichier commun)
+# ---------------------------------------------------------------------------
+
+SLEEP_MAP = {
+    "1m":      60,
+    "5m":      300,
+    "15m":     900,
+    "heure":   1800,
+    "1h":      1800,
+    "4h":      7200,
+    "jour":    86400,
+    "1d":      86400,
+    "semaine": 604800,
+    "1w":      604800,
+}
+
+
+def wait_until_next_check(timeframe: str, check_time_utc: str | None, interval_min: int | None):
+    """
+    Attend jusqu'au prochain check selon la config :
+    - check_time_utc : heure UTC fixe (ex: "00:01") → le bot se réveille
+                       chaque jour à cette heure précise
+                       UTC toujours utilisé peu importe le fuseau horaire local
+                       France = UTC+1 hiver / UTC+2 été
+    - interval_min   : intervalle en minutes (ex: 15) → le bot vérifie
+                       toutes les X minutes
+    - si les deux sont None → fallback sur SLEEP_MAP selon le timeframe
+                               daily/weekly = une fois par période
+                               intraday     = moitié de la période
+    """
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    if check_time_utc:
+        # Heure UTC fixe — ex: "00:01" pour juste après minuit UTC
+        h, m   = map(int, check_time_utc.split(":"))
+        target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        if target <= now:
+            # L'heure est déjà passée aujourd'hui → on attend demain
+            target += timedelta(days=1)
+        sleep_sec = (target - now).total_seconds()
+        log(
+            f"{BOT_PREFIX} 💤 Prochain check à {check_time_utc} UTC "
+            f"(dans {int(sleep_sec // 3600)}h {int((sleep_sec % 3600) // 60)}min)",
+            max_logs=1000
+        )
+
+    elif interval_min:
+        # Intervalle fixe en minutes
+        sleep_sec = interval_min * 60
+        log(f"{BOT_PREFIX} 💤 Prochain check dans {interval_min} min", max_logs=1000)
+
+    else:
+        # Fallback SLEEP_MAP
+        sleep_raw = SLEEP_MAP.get(timeframe, 3600)
+        if timeframe in ("jour", "1d", "semaine", "1w"):
+            # Daily/weekly : une seule vérification par période
+            sleep_sec = sleep_raw
+        else:
+            # Intraday : vérifie à mi-période pour ne pas rater la fermeture
+            sleep_sec = max(60, sleep_raw // 2)
+        log(f"{BOT_PREFIX} 💤 Prochain check dans {int(sleep_sec // 60)} min", max_logs=1000)
+
+    time.sleep(sleep_sec)
+
+
+def log_startup(prefix: str, state: dict):
+    """
+    Log affiché à chaque cycle avec le contenu complet du JSON.
+    Permet de savoir d'un coup d'œil l'état complet du bot.
+    """
+    cfg     = state.get("strategy", {})
+    balance = float(state.get("balance", 0))
+    pnl     = float(state.get("pnl_session", 0))
+    pos     = state.get("position")
+    trades  = len(state.get("trades", []))
+
+    symbol    = cfg.get("symbol", "?")
+    timeframe = cfg.get("timeframe", "?")
+    is_short  = cfg.get("is_short", False)
+    tp        = cfg.get("tp_pct", "—")
+    sl        = cfg.get("sl_pct", "—")
+    size      = cfg.get("size_pct", 100)
+    check     = cfg.get("check_time_utc") or f"{cfg.get('interval_min', '?' )} min"
+
+    ind = cfg.get("ind_entry", {})
+    indicators = []
+    if ind.get("use_rsi"):          indicators.append(f"RSI<{ind.get('rsi_threshold',30)}")
+    if ind.get("use_bollinger"):    indicators.append(f"Bollinger {ind.get('bollinger_band','')} ({ind.get('bollinger_mode','')})")
+    if ind.get("use_macd"):         indicators.append("MACD")
+    if ind.get("mm_align_periods"): indicators.append(f"AlignMM{ind.get('mm_align_periods')}")
+    if ind.get("mm_cross_a"):       indicators.append(f"CrossMM{ind.get('mm_cross_a')}/{ind.get('mm_cross_b')}")
+    ind_str = " + ".join(indicators) if indicators else "Aucun"
+
+    pos_str = f"Ouverte @ {pos['entry_price']:.2f}$" if pos else "Fermée"
+
+    log(
+        f"{prefix} {'SHORT' if is_short else 'LONG'} | {symbol} | {timeframe} | "
+        f"Capital: {balance:.2f}$ | PnL: {pnl:+.2f}$ | {trades} trades | "
+        f"Position: {pos_str} | Taille: {size}% | TP: {tp}% SL: {sl}% | "
+        f"Check: {check} | Indicateurs: {ind_str}",
+        max_logs=1000
+    )
+
+
+from src.utils.bot_state import
+from src.utils.bot_report import generate as generate_report
 from src.utils.binance_client import BinanceClient
 from src.controllers.indicators import apply_all_indicators
 from src.controllers.backtest import _build_signal
 
-SLEEP_MAP = {
-    "1m": 60, "5m": 300, "15m": 900,
-    "1h": 1800, "4h": 7200, "1d": 43200,
-}
-
-# Sécurité : taille max par trade en USDT pour éviter les accidents
-MAX_TRADE_SIZE_USDT = 500.0
-
 
 def run():
-    log("🤖 Bot MAINNET démarré — ⚠️ ARGENT RÉEL")
+    log(f"{BOT_PREFIX} 🤖 Bot MAINNET démarré — ⚠️ ARGENT RÉEL")
 
-    # Double confirmation au démarrage
-    print("\n" + "="*50)
-    print("⚠️  ATTENTION : BOT MAINNET — VRAI ARGENT")
-    print(f"Taille max par trade : {MAX_TRADE_SIZE_USDT} USDT")
-    print("="*50)
-    confirm = input("Tape 'OUI' pour confirmer : ")
-    if confirm.strip().upper() != "OUI":
-        print("Annulé.")
-        return
-
-    client = BinanceClient(testnet=False)   # ← mainnet
-    res    = client.test_connection()
-    if not res["ok"]:
-        log(f"❌ Connexion Binance mainnet impossible : {res['message']}")
-        return
-    log(res["message"])
+    # Client initialisé dans la boucle — pas au démarrage
+    # Si les clés manquent, le bot attend sans crasher
+    client = None
 
     while True:
         try:
@@ -63,7 +169,23 @@ def run():
                 time.sleep(10)
                 continue
 
+            # Connexion Binance seulement quand status=running
+            # La confirmation "OUI" se fait via Streamlit (bouton Démarrer)
+            if client is None:
+                client = BinanceClient(testnet=False)
+                res = client.test_connection()
+                if not res["ok"]:
+                    log(f"{BOT_PREFIX} ⚠️ Connexion impossible : {res['message']} — réessai dans 60s")
+                    client = None
+                    time.sleep(60)
+                    continue
+                log(f"{BOT_PREFIX} {res['message']}")
+
             cfg       = state.get("strategy", {})
+
+            # Log de démarrage avec toutes les infos — affiché une fois par cycle
+            log_startup(BOT_PREFIX, state)
+
             symbol    = cfg.get("symbol",    "BTCUSDT")
             timeframe = cfg.get("timeframe", "1h")
             tp_pct    = cfg.get("tp_pct")
@@ -76,7 +198,7 @@ def run():
             # ── Bougies ────────────────────────────────────────────────────
             df = client.get_klines(symbol, timeframe, limit=300)
             if df.empty or len(df) < 3:
-                log(f"⚠️ Données insuffisantes pour {symbol}")
+                log(f"{BOT_PREFIX} ⚠️ Données insuffisantes pour {symbol}")
                 time.sleep(60)
                 continue
 
@@ -118,7 +240,7 @@ def run():
                 balance = client.get_balance("USDT")
                 size    = min(balance * (size_pct / 100), MAX_TRADE_SIZE_USDT)
                 if size < 10:
-                    log("⚠️ Solde insuffisant")
+                    log(f"{BOT_PREFIX} {BOT_PREFIX} ⚠️ Solde insuffisant")
                 else:
                     qty = round(size / exec_price, 6)
                     res = client.buy(symbol, qty)
@@ -133,9 +255,9 @@ def run():
                             "size_usdt":   size,
                             "ts":          datetime.now().isoformat(),
                         }
-                        log(f"✅ [MAINNET] LONG ouvert @ {fill:.4f} | {size:.2f} USDT")
+                        log(f"{BOT_PREFIX} ✅ [MAINNET] LONG ouvert @ {fill:.4f} | {size:.2f} USDT")
                     else:
-                        log(f"❌ [MAINNET] Ordre échoué : {res}")
+                        log(f"{BOT_PREFIX} ❌ [MAINNET] Ordre échoué : {res}")
 
             # ── Sortie ─────────────────────────────────────────────────────
             elif pos is not None:
@@ -177,18 +299,21 @@ def run():
                         state["trades"].append(trade)
                         state["pnl_session"] = sum(t.get("pnl_usd", 0) for t in state["trades"])
                         state["position"]    = None
-                        log(f"🔴 [MAINNET] Fermé : {exit_reason} @ {fill:.4f} | PnL: {pnl_usd:+.2f}$")
+                        log(f"{BOT_PREFIX} 🔴 [MAINNET] Fermé : {exit_reason} @ {fill:.4f} | PnL: {pnl_usd:+.2f}$")
                     else:
-                        log(f"❌ [MAINNET] Vente échouée : {res}")
+                        log(f"{BOT_PREFIX} ❌ [MAINNET] Vente échouée : {res}")
 
             save_state(state)
-            time.sleep(max(60, SLEEP_MAP.get(timeframe, 1800) // 2))
+            generate_report(state)
+            check_time_utc = cfg.get("check_time_utc")
+            interval_min   = cfg.get("interval_min")
+            wait_until_next_check(timeframe, check_time_utc, interval_min)
 
         except KeyboardInterrupt:
-            log("Bot MAINNET arrêté (Ctrl+C)")
+            log(f"{BOT_PREFIX} {BOT_PREFIX} Bot MAINNET arrêté (Ctrl+C)")
             break
         except Exception as e:
-            log(f"⚠️ Erreur mainnet : {e}")
+            log(f"{BOT_PREFIX} ⚠️ Erreur mainnet : {e}")
             time.sleep(60)
 
 
