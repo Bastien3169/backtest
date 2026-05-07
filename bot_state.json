@@ -1,11 +1,19 @@
 {
-  "status": "stopped",
+  "status": "running",
   "mode": "local",
   "position": null,
   "balance": 1000.0,
   "balance_init": 1000.0,
   "trades": [],
-  "log": [],
+  "log": [
+    "[2026-05-08 01:38:30] [BOT_STATE] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-08 01:38:31] [BOT_STATE] \ud83d\udca4 Prochain check dans 1 min",
+    "[2026-05-08 01:39:31] [BOT_STATE] \ud83d\udca4 Prochain check dans 1 min",
+    "[2026-05-08 01:40:31] [BOT_STATE] \ud83d\udca4 Prochain check dans 1 min",
+    "[2026-05-08 01:41:32] [BOT_STATE] \ud83d\udca4 Prochain check dans 1 min",
+    "[2026-05-08 01:42:32] [BOT_STATE] \ud83d\udca4 Prochain check dans 1 min",
+    "[2026-05-08 01:43:07] [BOT_STATE] Bot LOCAL arr\u00eat\u00e9 (Ctrl+C)"
+  ],
   "strategy": {
     "symbol": "BTC-USD",
     "timeframe": "heure",
@@ -14,9 +22,9 @@
     "sl_pct": 2.5,
     "is_short": false,
     "check_time_utc": null,
-    "interval_min": 15,
+    "interval_min": 1,
     "ind_entry": {
-      "use_rsi": false,
+      "use_rsi": true,
       "rsi_period": 14,
       "rsi_threshold": 30.0,
       "mm_periods": [],
@@ -62,7 +70,7 @@
       "bollinger_confirm": false
     }
   },
-  "last_check": null,
-  "last_price": null,
+  "last_check": "2026-05-08T01:42:32.636082",
+  "last_price": 79919.0,
   "pnl_session": 0.0
 }

@@ -25,7 +25,11 @@ import argparse as _ap
 _parser = _ap.ArgumentParser()
 _parser.add_argument("--config", default="bot_state.json")
 _args, _ = _parser.parse_known_args()
-_bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), _args.config)
+# Chemin absolu ou relatif selon comment --config est passé
+if os.path.isabs(_args.config):
+    _bs.STATE_FILE = _args.config
+else:
+    _bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), _args.config)
 
 # Préfixe pour les logs — identifie quel bot écrit
 # ex: "bot_state_testnet_long.json" → "[TESTNET-LONG]"
@@ -36,7 +40,6 @@ get_state  = _bs.get_state
 save_state = _bs.save_state
 log        = _bs.log
 from src.utils.bot_state import
-from src.utils.bot_report import generate as generate_report
 from src.utils.binance_client import BinanceClient
 from src.controllers.indicators import apply_all_indicators
 from src.controllers.backtest import _build_signal
