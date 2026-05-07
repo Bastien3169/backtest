@@ -23,8 +23,8 @@ BOTS_CONFIG_FILE = os.path.join(os.getenv("DATA_DIR", "."), "bots_config.json")
 
 DEFAULT_BOTS = [
     {"bot_file": "bot_local.py",   "config": "bot_state_local_long.json",    "active": True},
-    {"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
     # Décommenter quand tu as les clés API Binance testnet
+    # {"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
     # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_long.json",  "active": False},
     # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_short.json", "active": False},
     # Décommenter seulement quand tu es prêt pour le vrai argent
@@ -49,14 +49,18 @@ def write_bots_config(bots: list):
 
 
 def init_files():
-    """Crée les fichiers manquants au démarrage."""
+    """Crée les fichiers manquants au démarrage dans DATA_DIR."""
+    data_dir = os.getenv("DATA_DIR", os.path.abspath("."))
+    os.makedirs(data_dir, exist_ok=True)   # crée /data si inexistant
+
     # Créer bots_config.json si absent
+    global BOTS_CONFIG_FILE
+    BOTS_CONFIG_FILE = os.path.join(data_dir, "bots_config.json")
     if not os.path.exists(BOTS_CONFIG_FILE):
         write_bots_config(DEFAULT_BOTS)
-        print(f"[start.py] bots_config.json créé")
+        print(f"[start.py] bots_config.json créé dans {data_dir}")
 
     # Créer les fichiers JSON d'état manquants
-    data_dir = os.getenv("DATA_DIR", ".")
     default_state = {
         "status": "stopped", "mode": "local", "position": None,
         "balance": 1000.0, "balance_init": 1000.0, "trades": [],
@@ -68,7 +72,7 @@ def init_files():
         if not os.path.exists(path):
             with open(path, "w") as f:
                 json.dump(default_state, f, indent=2)
-            print(f"[start.py] {bot['config']} créé")
+            print(f"[start.py] {bot['config']} créé dans {data_dir}")
 
 
 def start_services():
@@ -104,15 +108,17 @@ def start_services():
         for bot_cfg in bots:
             if not bot_cfg.get("active"):
                 continue
-            config = bot_cfg["config"]
+            config     = bot_cfg["config"]
+            data_dir   = os.getenv("DATA_DIR", os.path.abspath("."))
+            config_path = os.path.join(data_dir, config)   # chemin complet
             if config not in active_processes or active_processes[config].poll() is not None:
                 if config in active_processes:
                     print(f"[start.py] ⚠️ {config} crashé — relancement...")
                 else:
-                    print(f"[start.py] Lancement {bot_cfg['bot_file']} --config {config}")
+                    print(f"[start.py] Lancement {bot_cfg['bot_file']} --config {config_path}")
                 active_processes[config] = subprocess.Popen([
                     sys.executable, bot_cfg["bot_file"],
-                    "--config", config
+                    "--config", config_path   # chemin complet
                 ])
 
         # Vérifier Streamlit

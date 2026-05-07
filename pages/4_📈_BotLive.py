@@ -26,6 +26,20 @@ st.set_page_config(page_title="Bot Live", page_icon="📈", layout="wide")
 st.title("📈 Bot Trading — Monitoring")
 
 # ---------------------------------------------------------------------------
+# SÉLECTEUR DE BOT — en tout premier pour que get_state/save_state
+# utilisent le bon fichier JSON dès le début
+# ---------------------------------------------------------------------------
+import glob as _glob
+import src.utils.bot_state as _bs_module
+
+_data_dir   = os.getenv("DATA_DIR", os.path.abspath("."))
+_json_files = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
+_json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state_local_long.json"]
+
+_selected_json = st.selectbox("📂 Bot à configurer / monitorer", _json_labels, index=0)
+_bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
+
+# ---------------------------------------------------------------------------
 # 1️⃣ Mode de trading
 # ---------------------------------------------------------------------------
 st.subheader("1️⃣ Mode de trading")
@@ -237,22 +251,11 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("4️⃣ Monitoring")
 
-# Sélecteur de bot à monitorer
-import glob as _glob
-_data_dir  = os.getenv("DATA_DIR", os.path.abspath("."))
-_json_files = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
-_json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state.json"]
-_selected_json = st.selectbox("📂 Bot à monitorer", _json_labels, index=0)
-
-import src.utils.bot_state as _bs_module
-_bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
-
 state = get_state()
 
 # Debug — voir le chemin du fichier et son contenu brut
-import src.utils.bot_state as _bs
 with st.expander("🔍 Debug — bot_state.json", expanded=False):
-    st.caption(f"Chemin fichier : `{_bs.STATE_FILE}`")
+    st.caption(f"Chemin fichier : `{_bs_module.STATE_FILE}`")
     st.json(state)
 
 stat_col, pos_col, pnl_col = st.columns(3)

@@ -28,7 +28,13 @@ parser.add_argument("--config", default="bot_state.json",
 args, _ = parser.parse_known_args()
 
 # Override du fichier d'état si spécifié
-_bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.config)
+# Si --config est un chemin absolu (/data/bot_state_local_long.json) → on l'utilise tel quel
+# Si c'est un nom de fichier simple → on le cherche dans le dossier courant
+_config_arg = args.config
+if os.path.isabs(_config_arg):
+    _bs.STATE_FILE = _config_arg
+else:
+    _bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), _config_arg)
 
 # Préfixe pour les logs — identifie quel bot écrit
 # ex: "bot_state_local_long.json" → "[LOCAL-LONG]"
@@ -39,7 +45,7 @@ get_state  = _bs.get_state
 save_state = _bs.save_state
 log        = _bs.log
 reset      = _bs.reset
-from src.utils.binance_client import BinanceClient   # données publiques, pas de clé
+from src.utils.binance_client import BinanceClient
 from src.controllers.indicators import apply_all_indicators
 from src.controllers.backtest import _build_signal
 
@@ -159,7 +165,7 @@ DEFAULT_CONFIG = {
 
 
 def run():
-    log(f"{BOT_PREFIX} {BOT_PREFIX} 🤖 Bot LOCAL démarré")
+    log(f"{BOT_PREFIX} 🤖 Bot LOCAL démarré")
 
     while True:
         try:
@@ -229,7 +235,7 @@ def run():
             state["last_price"] = exec_price
 
             log(
-                f"{symbol} @ {exec_price:.4f} | "
+                f"{BOT_PREFIX} {symbol} @ {exec_price:.4f} | "
                 f"Entrée: {'✅' if entry_signal else '❌'} | "
                 f"Sortie: {'✅' if exit_signal else '❌'} | "
                 f"Position: {'Ouverte' if pos else 'Fermée'} | "
@@ -321,8 +327,17 @@ def run():
                     state["position"] = None
                     log(f"{BOT_PREFIX} 🔴 Position fermée : {exit_reason} @ {exit_price:.4f} | PnL: {pnl_usd:+.2f}")
 
+            # Fusionner les logs accumulés par log() pendant le cycle
+            # avec le state qu'on va sauvegarder
+            # Sans ça, save_state(state) écrase les logs écrits par log()
+            fresh = get_state()
+            state["log"]         = fresh["log"]
+            state["last_check"]  = datetime.now().isoformat()
+            state["last_price"]  = exec_price
+            state["pnl_session"] = round(
+                state["balance"] - state.get("balance_init", 1000.0), 2
+            )
             save_state(state)
-            generate_report(state)   # rapport HTML autonome
 
             # ── 7. Sleep ────────────────────────────────────────────────────
             # Lire les options de timing depuis la config
@@ -331,7 +346,7 @@ def run():
             wait_until_next_check(timeframe, check_time_utc, interval_min)
 
         except KeyboardInterrupt:
-            log(f"{BOT_PREFIX} {BOT_PREFIX} Bot LOCAL arrêté (Ctrl+C)")
+            log(f"{BOT_PREFIX} Bot LOCAL arrêté (Ctrl+C)")
             break
         except Exception as e:
             log(f"{BOT_PREFIX} ⚠️ Erreur : {e}")
