@@ -90,12 +90,34 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         use_bollinger = st.checkbox("Activer", key=f"{key_prefix}_boll")
         if use_bollinger:
             bollinger_band = st.radio(
-                "Franchissement",
+                "Bande",
                 ["haute", "basse"],
-                format_func=lambda x: "↗ Bande haute (breakout)" if x == "haute" else "↘ Bande basse (breakdown)",
+                format_func=lambda x: "Haute 🔴" if x == "haute" else "Basse 🟢",
                 key=f"{key_prefix}_boll_band",
                 horizontal=True)
-            st.caption("Signal = prix **franchit** la bande (1 bougie), pas seulement qu'il est au-dessus/dessous")
+            boll_mode = st.radio(
+                "Mode signal",
+                ["etat", "franchissement"],
+                format_func=lambda x: "📍 État (close sous/dessus la bande)" if x == "etat" else "↗ Franchissement (1 bougie uniquement)",
+                key=f"{key_prefix}_boll_mode",
+                horizontal=True)
+            if boll_mode == "etat":
+                boll_confirm = st.checkbox(
+                    "1ère bougie seulement",
+                    key=f"{key_prefix}_boll_confirm",
+                    help="Achat uniquement si T-1 était dans la bande — évite les runs prolongés",
+                )
+                if boll_confirm:
+                    st.caption("✅ T-1 dans la bande ET T en sort → achat open[T+1]")
+                else:
+                    st.caption("Close[T] < bande → achat open[T+1]")
+            else:
+                boll_confirm = False
+                st.caption("Signal uniquement sur la bougie qui franchit la bande")
+        else:
+            bollinger_band = None
+            boll_mode      = "etat"
+            boll_confirm   = False
 
     st.write("")
 
@@ -152,4 +174,6 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         "use_macd":         use_macd,
         "use_bollinger":    use_bollinger,
         "bollinger_band":   bollinger_band,
+        "bollinger_mode":   boll_mode if use_bollinger else "etat",
+        "bollinger_confirm": boll_confirm if use_bollinger else False,
     }

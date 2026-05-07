@@ -196,3 +196,6 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
         })
 
     return pd.DataFrame(rows)
+
+
+

@@ -11,7 +11,7 @@ import os
 
 COINGECKO_TOP100_URL = (
     "https://api.coingecko.com/api/v3/coins/markets"
-    "?vs_currency=eur&order=market_cap_desc&per_page=100&page=1&sparkline=false"
+    "?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false"
 )
 
 COINS_FILE = os.path.join(os.path.dirname(__file__), "coins.py")
@@ -49,7 +49,7 @@ def update_coins(progress_cb=None) -> tuple[list[dict], list[str]]:
     for idx, coin in enumerate(raw):
         symbol = coin["symbol"].upper()
         name   = coin["name"]
-        ticker = f"{symbol}-EUR"
+        ticker = f"{symbol}-USD"
 
         if progress_cb:
             progress_cb(
