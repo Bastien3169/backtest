@@ -20,6 +20,7 @@ def chart_price_trades(
     all_trades: dict[str, list[dict]],
     strategies_config: list[dict] | None = None,
     title: str = "Prix & Trades",
+    candles: bool = True,
 ) -> go.Figure:
     """
     Graphique principal avec sous-graphes automatiques selon les indicateurs actifs.
@@ -66,11 +67,21 @@ def chart_price_trades(
     )
 
     # ── Prix ──────────────────────────────────────────────────────────────
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df["close"],
-        mode="lines", name="Prix",
-        line=dict(color="#636EFA", width=1.5),
-    ), row=1, col=1)
+    if candles:
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df["open"], high=df["high"],
+            low=df["low"],   close=df["close"],
+            name="Prix",
+            increasing_line_color="#26A69A",
+            decreasing_line_color="#EF5350",
+        ), row=1, col=1)
+    else:
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df["close"],
+            mode="lines", name="Prix",
+            line=dict(color="#636EFA", width=1.5),
+        ), row=1, col=1)
 
     # ── MM sur le graphe prix ─────────────────────────────────────────────
     mm_colors = ["#FFA15A", "#19D3F3", "#FF6692", "#B6E880", "#FF97FF", "#FECB52"]

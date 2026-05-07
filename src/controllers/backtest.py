@@ -94,7 +94,8 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
         if col in df.columns:
             conditions.append(df[col])
 
-    # ── Croisement MM A / MM B — événement (shift interne conservé) ───────
+    # ── Croisement MM A / MM B — croisement sur bougie T (pas de shift interne)
+    # mm_a[T] croise mm_b[T] par rapport à T-1 → exécution open[T+1] via shift global
     cross_a = cfg.get("mm_cross_a")
     cross_b = cfg.get("mm_cross_b")
     if cross_a and cross_b:
@@ -107,7 +108,8 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
             else:
                 conditions.append((prev_a >= prev_b) & (df[col_a] < df[col_b]))
 
-    # ── MACD — événement (shift interne conservé) ─────────────────────────
+    # ── MACD — croisement sur bougie T (pas de shift interne)
+    # macd[T] croise macd_signal[T] par rapport à T-1 → exécution open[T+1] via shift global
     if cfg.get("use_macd") and "macd" in df.columns and "macd_signal" in df.columns:
         prev_macd = df["macd"].shift(1)
         prev_sig  = df["macd_signal"].shift(1)
@@ -116,18 +118,39 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
         else:
             conditions.append((prev_macd >= prev_sig) & (df["macd"] < df["macd_signal"]))
 
-    # ── Bollinger — événement franchissement (shift interne conservé) ─────
+    # ── Bollinger — franchissement OU état selon le choix utilisateur ────
     bollinger_band = cfg.get("bollinger_band")
+    bollinger_mode = cfg.get("bollinger_mode", "etat")
+    bollinger_confirm = cfg.get("bollinger_confirm", False)
     if cfg.get("use_bollinger") and bollinger_band and "bb_upper" in df.columns:
-        prev_close = df["close"].shift(1)
-        if bollinger_band == "haute":
-            prev_upper = df["bb_upper"].shift(1)
-            conditions.append((prev_close <= prev_upper) & (df["close"] > df["bb_upper"]))
+        if bollinger_mode == "franchissement":
+            # Signal ponctuel : la bougie T franchit la bande
+            prev_close = df["close"].shift(1)
+            if bollinger_band == "haute":
+                prev_upper = df["bb_upper"].shift(1)
+                conditions.append((prev_close <= prev_upper) & (df["close"] > df["bb_upper"]))
+            else:
+                prev_lower = df["bb_lower"].shift(1)
+                conditions.append((prev_close >= prev_lower) & (df["close"] < df["bb_lower"]))
         else:
-            prev_lower = df["bb_lower"].shift(1)
-            conditions.append((prev_close >= prev_lower) & (df["close"] < df["bb_lower"]))
+            # Signal état : close sous/dessus la bande
+            if bollinger_band == "haute":
+                cond = df["close"] > df["bb_upper"]
+            else:
+                cond = df["close"] < df["bb_lower"]
 
-    # ── Croisement actif vs MM BTC — événement (shift interne conservé) ───
+            if bollinger_confirm:
+                # Filtre : seulement si T-1 était à l'intérieur de la bande
+                # = première bougie qui sort (évite les runs prolongés)
+                if bollinger_band == "haute":
+                    prev_was_inside = df["close"].shift(1) <= df["bb_upper"].shift(1)
+                else:
+                    prev_was_inside = df["close"].shift(1) >= df["bb_lower"].shift(1)
+                cond = cond & prev_was_inside
+
+            conditions.append(cond)
+
+    # ── Croisement actif vs MM BTC — croisement sur bougie T (pas de shift interne)
     btc_period = cfg.get("btc_cross_period")
     if btc_period:
         col_btc   = f"btc_mm_{btc_period}"
@@ -197,15 +220,19 @@ def run_backtest_single(
         df_slice = df_full.iloc[-duree:].copy() if len(df_full) >= duree else df_full.copy()
 
     # ── TIMING : signal sur close[T] → exécution à open[T+1] ─────────────
-    # shift(1) décale le signal d'une bougie.
-    # L'exécution se fait sur row["open"] de la bougie courante,
-    # qui correspond à open[T+1] par rapport au signal.
-    sig_entry = _build_signal(df_slice, ind_achat, side="buy").shift(1).fillna(False)
-    sig_exit  = _build_signal(df_slice, ind_vente, side="sell").shift(1).fillna(False)
-
     tp_pct   = strategy.get("tp_pct")
     sl_pct   = strategy.get("sl_pct")
     is_short = strategy.get("is_short", False)
+
+    side_entry = "sell" if is_short else "buy"
+    side_exit  = "buy"  if is_short else "sell"
+
+    # Signaux calculés sur df_full (contexte complet) puis alignés sur df_slice
+    sig_entry_full = _build_signal(df_full, ind_achat, side=side_entry)
+    sig_exit_full  = _build_signal(df_full, ind_vente, side=side_exit)
+
+    sig_entry = sig_entry_full.reindex(df_slice.index).shift(1).fillna(False)
+    sig_exit  = sig_exit_full.reindex(df_slice.index).shift(1).fillna(False)
 
     cash        = capital
     position    = 0.0
@@ -217,7 +244,6 @@ def run_backtest_single(
         close = row["close"]
         high  = row.get("high", close)
         low   = row.get("low",  close)
-        # Exécution à l'open de la bougie courante (= open[T+1] par rapport au signal)
         exec_price = row.get("open", close)
 
         if not is_short:
@@ -228,7 +254,9 @@ def run_backtest_single(
             if position == 0 and cash > 0 and sig_entry.iloc[i]:
                 qty  = cash / (exec_price * (1 + frais_pct / 100))
                 cost = qty * exec_price * (1 + frais_pct / 100)
-                if cost <= cash:
+                # Tolérance d'arrondi flottant — cost peut être légèrement > cash
+                if cost <= cash * 1.0000001:
+                    cost = min(cost, cash)   # cap au cash disponible
                     cash       -= cost
                     position    = qty
                     entry_price = exec_price

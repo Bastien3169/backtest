@@ -1,0 +1,76 @@
+{
+  "status": "running",
+  "mode": "local",
+  "position": null,
+  "balance": 1000.0,
+  "balance_init": 1000.0,
+  "trades": [],
+  "log": [
+    "[2026-05-06 17:29:58] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-06 17:29:58] \ud83d\udca4 Prochain check dans 7 min",
+    "[2026-05-06 17:37:29] \ud83d\udca4 Prochain check dans 7 min",
+    "[2026-05-06 17:44:59] \ud83d\udca4 Prochain check dans 7 min",
+    "[2026-05-06 17:52:30] \ud83d\udca4 Prochain check dans 7 min",
+    "[2026-05-06 18:00:00] \ud83d\udca4 Prochain check dans 7 min",
+    "[2026-05-06 18:03:04] Bot LOCAL arr\u00eat\u00e9 (Ctrl+C)"
+  ],
+  "strategy": {
+    "symbol": "BTC-USD",
+    "timeframe": "15m",
+    "size_pct": 100,
+    "tp_pct": 5.0,
+    "sl_pct": 2.5,
+    "is_short": false,
+    "ind_entry": {
+      "use_rsi": false,
+      "rsi_period": 14,
+      "rsi_threshold": 30.0,
+      "mm_periods": [],
+      "mm_configs": {},
+      "mm_period": null,
+      "mm_condition": null,
+      "mm_slope": [
+        "up",
+        "down",
+        "flat"
+      ],
+      "mm_align_periods": [
+        10,
+        20,
+        50
+      ],
+      "mm_cross_a": null,
+      "mm_cross_b": null,
+      "btc_cross_period": null,
+      "use_macd": false,
+      "use_bollinger": false,
+      "bollinger_band": null,
+      "bollinger_mode": "etat"
+    },
+    "ind_exit": {
+      "use_rsi": false,
+      "rsi_period": 14,
+      "rsi_threshold": 70.0,
+      "mm_periods": [],
+      "mm_configs": {},
+      "mm_period": null,
+      "mm_condition": null,
+      "mm_slope": [
+        "up",
+        "down",
+        "flat"
+      ],
+      "mm_align_periods": [],
+      "mm_cross_a": null,
+      "mm_cross_b": null,
+      "btc_cross_period": null,
+      "use_macd": false,
+      "use_bollinger": false,
+      "bollinger_band": null,
+      "bollinger_mode": "etat"
+    }
+  },
+  "last_check": "2026-05-06T18:00:00.921285",
+  "last_price": 81704.25,
+  "pnl_session": 0.0
+}

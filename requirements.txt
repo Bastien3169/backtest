@@ -3,10 +3,14 @@ pandas>=2.0.0
 numpy>=1.26.0
 plotly>=5.20.0
 requests>=2.31.0
-pycoingecko>=3.1.0
 ta>=0.11.0
+python-dotenv~=1.0.0
+
+pycoingecko>=3.1.0
 yfinance>=0.2.40
 hyperliquid-python-sdk~=1.1.0
+python-binance>=1.0.19
+
 eth-account~=0.13.0
-python-dotenv~=1.0.0
+
 

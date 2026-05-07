@@ -70,7 +70,7 @@ with st.sidebar:
     # Capital
     if mode_capital == "Capital partagé":
         capital_global = st.number_input(
-            "Capital global (€)", min_value=1.0, value=1000.0, step=100.0
+            "Capital global ($)", min_value=1.0, value=1000.0, step=100.0
         )
     else:
         capital_global = None
@@ -244,10 +244,10 @@ for i, strat in enumerate(st.session_state.strategies):
             )
             total_alloc += alloc_pct
             capital_strat = capital_global * alloc_pct / 100
-            st.caption(f"Capital alloué : **{capital_strat:,.2f} €**")
+            st.caption(f"Capital alloué : **{capital_strat:,.2f} $**")
         else:
             capital_strat = st.number_input(
-                "Capital (€)",
+                "Capital ($)",
                 min_value=1.0,
                 value=strat.get("capital", 1000.0),
                 step=100.0,
@@ -504,7 +504,6 @@ if st.session_state.results:
 
         trades_slice = {}
         for sname, strat_results in all_results.items():
-            # On prend uniquement les trades de la durée affichée — pas de fusion entre durées
             trades_for_duration = strat_results.get(duree_chart, {}).get("trades", [])
             if df_with_indicators.index.empty:
                 trades_slice[sname] = []
@@ -516,7 +515,7 @@ if st.session_state.results:
             df_with_indicators,
             trades_slice,
             strategies_config=r.get("strategies_config"),
-            title=f"Prix {coin_label} + signaux",
+            title=f"Prix {coin_label} (USD) + signaux",
         )
         st.plotly_chart(fig_price, use_container_width=True)
 

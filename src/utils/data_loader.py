@@ -57,7 +57,7 @@ def fetch_ohlcv(coin_id: str, timeframe: str, duree_max_jours: int = 365) -> pd.
     Récupère les données OHLCV via yfinance.
 
     Args:
-        coin_id   : ticker Yahoo Finance (ex: "BTC-EUR")
+        coin_id   : ticker Yahoo Finance (ex: "BTC-USD")
         timeframe : "heure" | "jour" | "semaine" | "mois"
 
     Returns:
@@ -82,5 +82,5 @@ def fetch_ohlcv(coin_id: str, timeframe: str, duree_max_jours: int = 365) -> pd.
 
 def fetch_btc_mm(timeframe: str, period: int, duree_max_jours: int = 365) -> pd.Series:
     """Retourne la MM{period} du BTC-EUR sous forme de Series."""
-    df = fetch_ohlcv("BTC-EUR", timeframe, duree_max_jours)
+    df = fetch_ohlcv("BTC-USD", timeframe, duree_max_jours)
     return df["close"].rolling(window=period).mean().rename(f"btc_mm_{period}")
