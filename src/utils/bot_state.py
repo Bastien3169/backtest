@@ -8,9 +8,16 @@ import json
 import os
 from datetime import datetime
 
-# Sur Railway avec volume : DATA_DIR = /app/data (variable d'env Railway)
-# En local : fichier à la racine du projet (là où tu lances python)
-_ROOT      = os.getenv("DATA_DIR", ".")
+# os.path.abspath(".") = transforme "." (dossier relatif actuel) en chemin absolu complet
+# ex: "." devient "/app/code/" — toujours le même chemin peu importe le contexte
+#
+# Sans abspath, "." peut pointer vers des endroits différents selon comment
+# le process est lancé — ce qui ferait que bot_local.py et Streamlit
+# ne liraient/écriraient pas dans le même bot_state.json
+#
+# DATA_DIR = variable d'environnement Railway pour pointer vers le volume persistant
+# Si DATA_DIR n'existe pas (en local sur ton Mac) → on utilise le dossier courant
+_ROOT      = os.getenv("DATA_DIR", os.path.abspath("."))
 STATE_FILE = os.path.join(_ROOT, "bot_state.json")
 
 DEFAULT_STATE = {
