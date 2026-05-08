@@ -354,9 +354,9 @@ if trades:
             return ""
     cols_color = [c for c in ["pnl_usd", "pnl_pct"] if c in df_t.columns]
     if cols_color:
-        st.dataframe(df_t.style.map(color_pnl, subset=cols_color), use_container_width=True)
+        st.dataframe(df_t.style.map(color_pnl, subset=cols_color), width='stretch')
     else:
-        st.dataframe(df_t, use_container_width=True)
+        st.dataframe(df_t, width='stretch')
 
 # Log
 log_lines = state.get("log", [])

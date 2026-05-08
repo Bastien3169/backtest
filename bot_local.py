@@ -190,15 +190,7 @@ def run():
             bal = float(state.get("balance", 1000.0))
             pos = state.get("position")
 
-            # Log état du bot à chaque cycle — dans JSON ET terminal
-            pnl_session = float(state.get("pnl_session", 0))
-            nb_trades   = len(state.get("trades", []))
-            pos_str     = f"Ouverte @ {pos['entry_price']:.2f}$" if pos else "Fermée"
-            log(f"{BOT_PREFIX} {'SHORT' if is_short else 'LONG'} | {binance_symbol} | {timeframe} | "
-                f"Capital: {bal:.2f}$ | PnL session: {pnl_session:+.2f}$ | {nb_trades} trades | "
-                f"Position: {pos_str}", max_logs=5000)
-
-            # Signal — terminal uniquement (trop verbeux pour le JSON)
+            # Signal — terminal uniquement
             print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} "
                   f"{binance_symbol} @ {exec_price:.2f} | "
                   f"Entrée: {'✅' if entry_signal else '❌'} | "
@@ -262,6 +254,18 @@ def run():
                         max_logs=5000)
 
             # ── 6. Sauvegarder ─────────────────────────────────────────────
+            # Log état FINAL du cycle — après entrée/sortie
+            # Reflète la situation réelle à la fin du cycle
+            pos         = state.get("position")   # relire après actions
+            bal         = float(state.get("balance", 1000.0))
+            equity      = bal + pos["qty"] * exec_price if pos else bal
+            pos_str     = f"Ouverte @ {pos['entry_price']:.2f}$" if pos else "Fermée"
+            pnl_session = float(state.get("pnl_session", 0))
+            nb_trades   = len(state.get("trades", []))
+            log(f"{BOT_PREFIX} {'SHORT' if is_short else 'LONG'} | {binance_symbol} | {timeframe} | "
+                f"Equity: {equity:.2f}$ | PnL session: {pnl_session:+.2f}$ | {nb_trades} trades | "
+                f"Position: {pos_str}", max_logs=5000)
+
             # Fusionner les logs écrits par log() pendant ce cycle
             # (sans ça save_state() les écraserait)
             fresh                = get_state()

@@ -130,13 +130,13 @@ with st.sidebar:
         # Ajouter / supprimer des plages
         col_add, col_clear = st.columns(2)
         with col_add:
-            if st.button("➕ Ajouter une plage", use_container_width=True):
+            if st.button("➕ Ajouter une plage", width='stretch'):
                 st.session_state.date_ranges.append(
                     (date.today() - timedelta(days=90), date.today())
                 )
                 st.rerun()
         with col_clear:
-            if st.button("🗑️ Tout effacer", use_container_width=True):
+            if st.button("🗑️ Tout effacer", width='stretch'):
                 st.session_state.date_ranges = [
                     (date.today() - timedelta(days=360), date.today())
                 ]
@@ -171,7 +171,7 @@ with st.sidebar:
     st.divider()
 
     # Bouton charger les données
-    if st.button("🔄 Charger les données marché", use_container_width=True):
+    if st.button("🔄 Charger les données marché", width='stretch'):
         with st.spinner(f"Récupération OHLCV {coin_label}..."):
             try:
                 df = fetch_ohlcv(coin_id, timeframe, max(durees) if durees else 365)
@@ -319,7 +319,7 @@ with col_btn:
     )
     run_clicked = st.button(
         "▶️ Calculer",
-        use_container_width=True,
+        width='stretch',
         disabled=run_disabled,
         type="primary",
     )
@@ -458,7 +458,7 @@ if st.session_state.results:
             .format("{:.2f}", na_rep="—")
             .map(color_rendement, subset=pd.IndexSlice[rend_rows, :])
         )
-        st.dataframe(styled, use_container_width=True)
+        st.dataframe(styled, width='stretch')
 
     st.divider()
 
@@ -482,7 +482,7 @@ if st.session_state.results:
             .format("{:.2f}", na_rep="—")
             .map(color_comp, subset=rend_comp_cols)
         )
-        st.dataframe(styled_comp, use_container_width=True)
+        st.dataframe(styled_comp, width='stretch')
         st.divider()
 
     # ── Graphiques ────────────────────────────────────────────────────────
@@ -517,17 +517,17 @@ if st.session_state.results:
             strategies_config=r.get("strategies_config"),
             title=f"Prix {coin_label} (USD) + signaux",
         )
-        st.plotly_chart(fig_price, use_container_width=True)
+        st.plotly_chart(fig_price, width='stretch')
 
     # Rendement comparatif
     fig_rend = chart_rendement_comparison(all_results, durees)
-    st.plotly_chart(fig_rend, use_container_width=True)
+    st.plotly_chart(fig_rend, width='stretch')
 
     # Equity curves
     duree_eq = st.selectbox("Durée pour equity curves", options=durees, index=len(durees) - 1)
     fig_eq = chart_equity_curves(all_results, duree_eq)
-    st.plotly_chart(fig_eq, use_container_width=True)
+    st.plotly_chart(fig_eq, width='stretch')
 
     # Drawdown
     fig_dd = chart_drawdown_comparison(all_results, durees)
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width='stretch')
