@@ -161,6 +161,18 @@ def run():
 
             # ── 1. Bougies Binance ─────────────────────────────────────────
             binance_symbol = symbol.replace("-USD", "USDT")
+
+            # Log immédiat — confirme que le bot est en vie
+            check_time_utc = cfg.get("check_time_utc")
+            interval_min   = cfg.get("interval_min")
+            sleep_sec_next = next_sleep(timeframe, check_time_utc, interval_min)
+            next_check     = datetime.now(timezone.utc) + timedelta(seconds=sleep_sec_next)
+            pos_now        = state.get("position")
+            pos_str_now    = f"Ouverte @ {pos_now['entry_price']:.2f}$" if pos_now else "Fermée"
+            log(f"{BOT_PREFIX} ✔️ En ligne | {binance_symbol} | {timeframe} | "
+                f"Position: {pos_str_now} | "
+                f"Prochain check à {next_check.strftime('%H:%M:%S')} UTC", max_logs=5000)
+
             df = _binance.get_klines(binance_symbol, timeframe, limit=300)
             if df.empty or len(df) < 3:
                 log(f"{BOT_PREFIX} ⚠️ Données indisponibles pour {binance_symbol}", max_logs=5000)
