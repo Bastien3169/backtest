@@ -137,6 +137,7 @@ def next_sleep(timeframe: str, check_time_utc: str | None, interval_min: int | N
 # ---------------------------------------------------------------------------
 def run():
     log(f"{BOT_PREFIX} 🤖 Bot LOCAL démarré", max_logs=5000)
+    first_run = True   # flag pour forcer un cycle immédiat au démarrage
 
     while True:
         try:
@@ -145,6 +146,7 @@ def run():
             # En attente tant que status != "running"
             if state.get("status") != "running":
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} En attente...")
+                first_run = True   # reset pour le prochain démarrage
                 time.sleep(10)
                 continue
 
@@ -162,7 +164,8 @@ def run():
             # ── 1. Bougies Binance ─────────────────────────────────────────
             binance_symbol = symbol.replace("-USD", "USDT")
 
-            # Log immédiat — confirme que le bot est en vie
+            # Log immédiat au DÉBUT du cycle (avant le sleep)
+            # Visible dès le démarrage sur Streamlit et Railway
             check_time_utc = cfg.get("check_time_utc")
             interval_min   = cfg.get("interval_min")
             sleep_sec_next = next_sleep(timeframe, check_time_utc, interval_min)
@@ -295,6 +298,10 @@ def run():
             log(f"{BOT_PREFIX} 💤 Prochain check à {next_check.strftime('%H:%M:%S')} UTC "
                 f"(dans {sleep_sec//3600}h {(sleep_sec%3600)//60}min {sleep_sec%60}s)",
                 max_logs=5000)
+
+            if first_run:
+                # Premier cycle : on a déjà vérifié le signal — on dort maintenant
+                first_run = False
 
             time.sleep(sleep_sec)
 
