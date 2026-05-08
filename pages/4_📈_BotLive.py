@@ -16,6 +16,7 @@ load_dotenv(os.path.join(_ROOT, ".env"))
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from datetime import datetime
 
 from src.utils.bot_state import get_state, save_state, reset
 from src.utils.binance_client import BinanceClient, BINANCE_SYMBOLS
@@ -235,8 +236,42 @@ with c3:
 
 with c4:
     if st.button("🗑️ Reset session"):
-        reset()
-        st.rerun()
+        pos = get_state().get("position")
+        if pos and not is_local:
+            st.error("⚠️ Position ouverte sur l'exchange ! Ferme-la d'abord avec '🔴 Forcer clôture'")
+        else:
+            reset()
+            st.rerun()
+
+# Bouton forcer clôture — sur une ligne à part car action critique
+pos = get_state().get("position")
+if pos:
+    st.warning(f"⚠️ Position ouverte : {pos.get('side')} {pos.get('symbol')} @ {pos.get('entry_price'):.2f}$")
+    col_close, _ = st.columns([1, 3])
+    with col_close:
+        if st.button("🔴 Forcer clôture", type="primary"):
+            if is_local:
+                # En local : on simule la clôture au dernier prix connu
+                s          = get_state()
+                last_price = s.get("last_price") or pos["entry_price"]
+                pnl_pct    = (last_price - pos["entry_price"]) / pos["entry_price"] * 100
+                pnl_usd    = round(pos["qty"] * last_price - pos["size_usdt"], 2)
+                s["balance"] += pos["qty"] * last_price
+                s["pnl_session"] = round(s["balance"] - s.get("balance_init", 1000.0), 2)
+                s["trades"].append({
+                    "ts": datetime.now().isoformat(),
+                    "symbol": pos["symbol"], "side": pos["side"],
+                    "entry_price": pos["entry_price"], "exit_price": last_price,
+                    "qty": pos["qty"], "pnl_pct": round(pnl_pct, 2),
+                    "pnl_usd": pnl_usd, "raison": "Clôture forcée",
+                })
+                s["position"] = None
+                save_state(s)
+                st.success(f"Position fermée @ {last_price:.2f}$ | PnL: {pnl_usd:+.2f}$")
+                st.rerun()
+            else:
+                # En testnet/mainnet : passer un ordre de clôture via Binance
+                st.info("Pour le testnet/mainnet : ferme manuellement sur Binance puis clique Reset.")
 
 # Commande à lancer
 if state.get("status") == "running":
