@@ -74,28 +74,61 @@ SLEEP_MAP = {
 }
 
 
+# Délai ajouté après la fermeture de la bougie
+# Pour laisser le temps à Binance/yfinance de mettre à jour les données
+BUFFER = {
+    "1m": 5, "5m": 10, "15m": 15,
+    "1h": 30, "heure": 30,
+    "4h": 60,
+    "1d": 120, "jour": 120,
+    "1w": 300, "semaine": 300,
+}
+
+
 def next_sleep(timeframe: str, check_time_utc: str | None, interval_min: int | None) -> int:
     """
-    Retourne le nombre de secondes à attendre avant le prochain check.
+    Retourne les secondes à attendre avant le prochain check.
 
-    Priorité :
-    1. interval_min  → intervalle fixe en minutes (ex: 60 pour toutes les heures)
-    2. check_time_utc → heure UTC fixe quotidienne (ex: "00:01" pour daily)
-    3. SLEEP_MAP     → fallback selon le timeframe
+    Logique de synchronisation :
+    - interval_min=60 → check à la prochaine heure ronde UTC + buffer
+      Ex: lancé à 9h35 → check à 10h00:30, puis 11h00:30, 12h00:30...
+    - check_time_utc="00:01" → check chaque jour à cette heure UTC fixe
+    - Sans config → durée de la bougie + buffer (fallback)
+
+    Le buffer laisse le temps à Binance de finaliser la bougie.
     """
+    now    = datetime.now(timezone.utc)
+    buffer = BUFFER.get(timeframe, 30)
+
     if interval_min:
-        return interval_min * 60
+        # Buffer selon la durée de l'intervalle
+        # Plus l'intervalle est long, plus on attend avant de lire les données
+        if interval_min <= 1:    buf = 5
+        elif interval_min <= 5:  buf = 10
+        elif interval_min <= 15: buf = 15
+        elif interval_min <= 60: buf = 30
+        elif interval_min <= 240: buf = 60
+        else:                    buf = 120   # daily et +
+
+        interval_sec  = interval_min * 60
+        seconds_today = now.hour * 3600 + now.minute * 60 + now.second
+        next_multiple = ((seconds_today // interval_sec) + 1) * interval_sec
+        sleep_sec     = next_multiple - seconds_today + buf
+        return max(10, sleep_sec)
 
     if check_time_utc:
-        now    = datetime.now(timezone.utc)
+        # Heure UTC fixe quotidienne ex: "00:01"
         h, m   = map(int, check_time_utc.split(":"))
         target = now.replace(hour=h, minute=m, second=0, microsecond=0)
         if target <= now:
             target += timedelta(days=1)
         return int((target - now).total_seconds())
 
+    # Fallback SLEEP_MAP
     raw = SLEEP_MAP.get(timeframe, 3600)
-    return raw if timeframe in ("1d", "jour", "1w", "semaine") else max(60, raw // 2)
+    if timeframe in ("1d", "jour", "1w", "semaine"):
+        return raw + buffer
+    return max(60, raw // 2) + buffer
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +274,10 @@ def run():
             interval_min   = cfg.get("interval_min")
             sleep_sec      = next_sleep(timeframe, check_time_utc, interval_min)
 
-            # Afficher le prochain check
-            if check_time_utc:
-                log(f"{BOT_PREFIX} 💤 Prochain check à {check_time_utc} UTC "
-                    f"(dans {sleep_sec//3600}h {(sleep_sec%3600)//60}min)", max_logs=5000)
-            else:
-                log(f"{BOT_PREFIX} 💤 Prochain check dans {sleep_sec//60} min", max_logs=5000)
+            next_check = datetime.now(timezone.utc) + timedelta(seconds=sleep_sec)
+            log(f"{BOT_PREFIX} 💤 Prochain check à {next_check.strftime('%H:%M:%S')} UTC "
+                f"(dans {sleep_sec//3600}h {(sleep_sec%3600)//60}min {sleep_sec%60}s)",
+                max_logs=5000)
 
             time.sleep(sleep_sec)
 
