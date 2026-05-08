@@ -44,8 +44,9 @@ if os.path.isabs(args.config):
 else:
     _bs.STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.config)
 
-# Préfixe de log : "bot_state_local_long.json" → "[LOCAL-LONG]"
-BOT_PREFIX = "[" + args.config.replace("bot_state_", "").replace(".json", "").upper() + "]"
+# Préfixe de log : "/data/bot_state_local_long.json" → "[LOCAL-LONG]"
+_basename  = os.path.basename(args.config)   # garde juste le nom du fichier
+BOT_PREFIX = "[" + _basename.replace("bot_state_", "").replace(".json", "").upper() + "]"
 
 # Raccourcis
 get_state  = _bs.get_state
