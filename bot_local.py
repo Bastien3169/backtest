@@ -48,6 +48,9 @@ else:
 _basename  = os.path.basename(args.config)   # garde juste le nom du fichier
 BOT_PREFIX = "[" + _basename.replace("bot_state_", "").replace(".json", "").upper() + "]"
 
+# Debug — chemin exact du fichier JSON utilisé par ce bot
+print(f"[{BOT_PREFIX}] Fichier JSON : {_bs.STATE_FILE}")
+
 # Raccourcis
 get_state  = _bs.get_state
 save_state = _bs.save_state
