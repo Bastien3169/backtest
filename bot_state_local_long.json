@@ -5,7 +5,19 @@
   "balance": 1000.0,
   "balance_init": 1000.0,
   "trades": [],
-  "log": [],
+  "log": [
+    "[2026-05-11 16:39:25] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)",
+    "[2026-05-11 16:39:31] [LOCAL_LONG] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-11 16:39:31] [LOCAL_LONG] \u2714\ufe0f En ligne | BTCUSDT | heure | Position: Ferm\u00e9e | Prochain check \u00e0 14:45:15 UTC",
+    "[2026-05-11 16:39:31] [LOCAL_LONG] LONG | BTCUSDT | heure | Equity: 1000.00$ | PnL session: +0.00$ | 0 trades | Position: Ferm\u00e9e",
+    "[2026-05-11 16:39:31] [LOCAL_LONG] \ud83d\udca4 Prochain check \u00e0 14:45:15 UTC (dans 0h 5min 44s)",
+    "[2026-05-11 16:43:33] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)",
+    "[2026-05-11 16:43:38] [LOCAL_LONG] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-11 16:43:38] [LOCAL_LONG] \u2714\ufe0f En ligne | BTCUSDT | heure | Position: Ferm\u00e9e | Prochain check \u00e0 14:45:15 UTC",
+    "[2026-05-11 16:43:38] [LOCAL_LONG] LONG | BTCUSDT | heure | Equity: 1000.00$ | PnL session: +0.00$ | 0 trades | Position: Ferm\u00e9e",
+    "[2026-05-11 16:43:38] [LOCAL_LONG] \ud83d\udca4 Prochain check \u00e0 14:45:15 UTC (dans 0h 1min 37s)",
+    "[2026-05-11 16:43:51] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
+  ],
   "strategy": {
     "symbol": "BTC-USD",
     "timeframe": "heure",
@@ -14,7 +26,7 @@
     "sl_pct": 2.5,
     "is_short": false,
     "check_time_utc": null,
-    "interval_min": 2,
+    "interval_min": 15,
     "ind_entry": {
       "use_rsi": false,
       "rsi_period": 14,
@@ -66,7 +78,7 @@
       "bollinger_confirm": false
     }
   },
-  "last_check": null,
-  "last_price": null,
+  "last_check": "2026-05-11T16:43:38.824199",
+  "last_price": 81072.01,
   "pnl_session": 0.0
 }

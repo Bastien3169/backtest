@@ -1,0 +1,16 @@
+{
+  "status": "stopped",
+  "mode": "local",
+  "position": null,
+  "balance": 1000.0,
+  "balance_init": 1000.0,
+  "trades": [],
+  "log": [
+    "[2026-05-11 16:34:08] [LO] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-11 16:34:15] [LO] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
+  ],
+  "strategy": {},
+  "last_check": null,
+  "last_price": null,
+  "pnl_session": 0.0
+}

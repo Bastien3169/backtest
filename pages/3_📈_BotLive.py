@@ -18,7 +18,6 @@ import pandas as pd
 from datetime import datetime
 from datetime import datetime
 
-from src.utils.bot_state import get_state, save_state, reset
 from src.utils.binance_client import BinanceClient, BINANCE_SYMBOLS
 from src.utils.data_loader import get_all_assets
 from src.views.indicator_bloc import render_indicator_bloc
@@ -33,12 +32,18 @@ st.title("📈 Bot Trading — Monitoring")
 import glob as _glob
 import src.utils.bot_state as _bs_module
 
-_data_dir   = os.getenv("DATA_DIR", os.path.abspath("."))
-_json_files = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
+_data_dir    = os.getenv("DATA_DIR", os.path.abspath("."))
+_json_files  = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
 _json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state_local_long.json"]
 
 _selected_json = st.selectbox("📂 Bot à configurer / monitorer", _json_labels, index=0)
 _bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
+
+# Utiliser les fonctions via le module — pas via import direct
+# Comme ça elles lisent toujours STATE_FILE mis à jour ci-dessus
+get_state  = _bs_module.get_state
+save_state = _bs_module.save_state
+reset      = _bs_module.reset
 
 # ---------------------------------------------------------------------------
 # 1️⃣ Mode de trading

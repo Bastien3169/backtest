@@ -14,7 +14,7 @@
     "sl_pct": 2.5,
     "is_short": false,
     "check_time_utc": null,
-    "interval_min": 2,
+    "interval_min": 15,
     "ind_entry": {
       "use_rsi": false,
       "rsi_period": 14,

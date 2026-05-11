@@ -253,9 +253,15 @@ def run():
                     should_exit, exit_reason = True, "Signal"
 
                 if should_exit:
-                    pnl_pct     = (exit_price - entry) / entry * 100 if not is_short else (entry - exit_price) / entry * 100
-                    pnl_usd     = round(pos["qty"] * exit_price - pos["size_usdt"], 2)
-                    state["balance"]      += pos["qty"] * exit_price
+                    pnl_pct = (exit_price - entry) / entry * 100 if not is_short else (entry - exit_price) / entry * 100
+                    # LONG : on revend les tokens → proceeds - cost
+                    # SHORT : on rachète les tokens → cost - proceeds (inversé car on a vendu haut, on rachète bas)
+                    if not is_short:
+                        pnl_usd = round(pos["qty"] * exit_price - pos["size_usdt"], 2)
+                    else:
+                        pnl_usd = round(pos["size_usdt"] - pos["qty"] * exit_price, 2)
+                    # Récupération du capital + PnL
+                    state["balance"]     += pos["size_usdt"] + pnl_usd
                     state["pnl_session"]   = round(state["balance"] - state.get("balance_init", 1000.0), 2)
                     pnl_session_pct        = round(state["pnl_session"] / state.get("balance_init", 1000.0) * 100, 2)
                     state["trades"].append({
