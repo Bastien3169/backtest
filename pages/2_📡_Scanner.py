@@ -102,13 +102,13 @@ else:
 
     col_add, col_clear = st.columns(2)
     with col_add:
-        if st.button("➕ Ajouter une plage", key="scan_add_range", use_container_width=True):
+        if st.button("➕ Ajouter une plage", key="scan_add_range", width='stretch'):
             st.session_state.scan_date_ranges.append(
                 (date.today() - timedelta(days=90), date.today())
             )
             st.rerun()
     with col_clear:
-        if st.button("🗑️ Tout effacer", key="scan_clear_range", use_container_width=True):
+        if st.button("🗑️ Tout effacer", key="scan_clear_range", width='stretch'):
             st.session_state.scan_date_ranges = [
                 (date.today() - timedelta(days=360), date.today())
             ]
@@ -260,7 +260,7 @@ if "scan_results" in st.session_state:
         .format(fmt_dict)
         .map(color_val, subset=rend_cols)
     )
-    st.dataframe(styled, use_container_width=True, height=600)
+    st.dataframe(styled, width='stretch', height=600)
 
     st.subheader("🏆 Top 5 — Meilleur rendement")
     if rend_cols:
