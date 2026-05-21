@@ -164,7 +164,7 @@ for ui_col, (label, key) in zip(hcols, COLS.items()):
     with ui_col:
         if key:
             arrow = (" ↑" if st.session_state.sort_asc else " ↓") if st.session_state.sort_col == key else ""
-            if st.button(f"{label}{arrow}", key=f"hdr_{key}", use_container_width=True):
+            if st.button(f"{label}{arrow}", key=f"hdr_{key}", width='stretch'):
                 if st.session_state.sort_col == key:
                     st.session_state.sort_asc = not st.session_state.sort_asc
                 else:
@@ -241,7 +241,7 @@ for _, row in df_filtered.iterrows():
         spark = row.get("sparkline", [])
         if len(spark) >= 2:
             st.plotly_chart(sparkline_fig(spark, row["perf_7d"]),
-                            use_container_width=False,
+                            width='content',
                             config={"displayModeBar": False})
         else:
             st.caption("—")
