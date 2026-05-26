@@ -1,46 +1,96 @@
 """
 pages/4_📈_BotLive.py
-Monitoring unifié des 3 modes de trading.
-Configure la stratégie + démarre/arrête le bot depuis Streamlit.
-Le bot tourne dans un terminal séparé (python bot_local.py / testnet / mainnet).
+Monitoring et configuration du bot de trading.
 """
 
-import sys, os, time
+# ---------------------------------------------------------------------------
+# Imports système — en premier pour que sys.path soit correct
+# avant tout import de src/
+# ---------------------------------------------------------------------------
+import sys
+import os
+import time
+import glob
+
+# Ajouter la racine du projet en premier dans sys.path
+# Sans ça, "from src.utils..." échoue car Streamlit lance depuis pages/
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from dotenv import load_dotenv
-load_dotenv(os.path.join(_ROOT, ".env"))
-
+# ---------------------------------------------------------------------------
+# Imports librairies externes
+# ---------------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
+import extra_streamlit_components as stx   # gestion des cookies (protection mot de passe)
 from datetime import datetime
-from datetime import datetime
+from dotenv import load_dotenv
 
+load_dotenv(os.path.join(_ROOT, ".env"))
+
+# ---------------------------------------------------------------------------
+# Imports internes (src/)
+# ---------------------------------------------------------------------------
+import src.utils.bot_state as _bs_module
 from src.utils.binance_client import BinanceClient, BINANCE_SYMBOLS
 from src.utils.data_loader import get_all_assets
 from src.views.indicator_bloc import render_indicator_bloc
 
+# ---------------------------------------------------------------------------
+# Configuration de la page
+# ---------------------------------------------------------------------------
 st.set_page_config(page_title="Bot Live", page_icon="📈", layout="wide")
+
+# ---------------------------------------------------------------------------
+# 🔒 Protection par mot de passe
+#
+# BOT_PASSWORD défini dans Railway Variables → protection active
+# Non défini (en local) → accès direct, pas de mot de passe demandé
+#
+# Pipeline :
+#   1. Streamlit lit le cookie "bot_auth" dans le navigateur
+#   2a. Cookie valide → accès direct ✅
+#   2b. Pas de cookie → affiche champ mot de passe
+#   3. Mot de passe correct → cookie créé (expire dans 30 jours) → accès ✅
+#   4. Mot de passe incorrect → message d'erreur ❌
+# ---------------------------------------------------------------------------
+BOT_PASSWORD = os.getenv("BOT_PASSWORD", "")
+
+if BOT_PASSWORD:
+    # Gestionnaire de cookies — lit/écrit dans le navigateur de l'utilisateur
+    gestionnaire_cookies = stx.CookieManager(key="bot_auth_manager")
+    cookie_auth = gestionnaire_cookies.get("bot_auth")
+
+    if cookie_auth != "ok":
+        st.title("🔒 Accès protégé")
+        saisie = st.text_input("Mot de passe", type="password", key="saisie_mdp")
+
+        if saisie == BOT_PASSWORD:
+            # Correct → créer le cookie valable 30 jours
+            gestionnaire_cookies.set("bot_auth", "ok", max_age=30 * 24 * 3600)
+            st.rerun()
+        elif saisie:
+            st.error("❌ Mot de passe incorrect")
+
+        st.stop()   # bloquer le reste de la page
+
+# ---------------------------------------------------------------------------
+# Page principale
+# ---------------------------------------------------------------------------
 st.title("📈 Bot Trading — Monitoring")
 
 # ---------------------------------------------------------------------------
-# SÉLECTEUR DE BOT — en tout premier pour que get_state/save_state
-# utilisent le bon fichier JSON dès le début
+# Sélecteur de bot — en tout premier pour que get_state/save_state
+# utilisent le bon fichier JSON dès le début de la page
 # ---------------------------------------------------------------------------
-import glob as _glob
-import src.utils.bot_state as _bs_module
-
 _data_dir    = os.getenv("DATA_DIR", os.path.abspath("."))
-_json_files  = sorted(_glob.glob(os.path.join(_data_dir, "bot_state*.json")))
+_json_files  = sorted(glob.glob(os.path.join(_data_dir, "bot_state*.json")))
 _json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state_local_long.json"]
 
-_selected_json = st.selectbox("📂 Bot à configurer / monitorer", _json_labels, index=0)
+_selected_json        = st.selectbox("📂 Bot à configurer / monitorer", _json_labels, index=0)
 _bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
 
-# Utiliser les fonctions via le module — pas via import direct
-# Comme ça elles lisent toujours STATE_FILE mis à jour ci-dessus
 get_state  = _bs_module.get_state
 save_state = _bs_module.save_state
 reset      = _bs_module.reset
@@ -60,17 +110,15 @@ is_testnet = "Testnet" in mode
 is_mainnet = "Mainnet" in mode
 
 if is_local:
-    st.info("**Mode Local** — Données yfinance, aucune API, simulation pure dans le JSON. Lance `python bot_local.py`")
+    st.info("**Mode Local** — Données Binance public, simulation pure dans le JSON. Lance `python bot_local.py`")
 elif is_testnet:
     st.info("**Mode Testnet** — Binance testnet, clé gratuite, faux argent. Lance `python bot_testnet.py`")
 else:
     st.error("**⚠️ Mode Mainnet — VRAI ARGENT.** Lance `python bot_mainnet.py` dans un terminal.")
 
-# Connexion Binance si nécessaire
 if not is_local:
     with st.expander("🔑 Connexion Binance", expanded=False):
         api_key = os.getenv("BINANCE_TESTNET_API_KEY" if is_testnet else "BINANCE_API_KEY")
-        secret  = os.getenv("BINANCE_TESTNET_SECRET_KEY" if is_testnet else "BINANCE_API_SECRET")
         if api_key:
             st.success("✅ Clés chargées depuis `.env`")
         else:
@@ -84,16 +132,12 @@ if not is_local:
 BINANCE_TESTNET_API_KEY=...
 BINANCE_TESTNET_SECRET_KEY=...
 ```
-Tu reçois automatiquement du BTC et ETH fictifs.
 """)
         if st.button("🔌 Tester la connexion"):
             try:
                 client = BinanceClient(testnet=is_testnet)
                 res    = client.test_connection()
-                if res["ok"]:
-                    st.success(res["message"])
-                else:
-                    st.error(res["message"])
+                st.success(res["message"]) if res["ok"] else st.error(res["message"])
             except Exception as e:
                 st.error(str(e))
 
@@ -105,31 +149,30 @@ st.divider()
 st.subheader("2️⃣ Configuration")
 
 cfg1, cfg2, cfg3 = st.columns(3)
+
 with cfg1:
-    # Même liste que app.py — cryptos + indices depuis coins.py
-    _all_assets    = get_all_assets()
-    _asset_labels  = [f"{c['symbol']} — {c['name']}" for c in _all_assets]
-    _asset_map     = {f"{c['symbol']} — {c['name']}": c["id"] for c in _all_assets}
+    _all_assets   = get_all_assets()
+    _asset_labels = [f"{c['symbol']} — {c['name']}" for c in _all_assets]
+    _asset_map    = {f"{c['symbol']} — {c['name']}": c["id"] for c in _all_assets}
 
     asset_label = st.selectbox("Actif", _asset_labels, index=0)
-    asset_id    = _asset_map[asset_label]   # ticker yfinance (ex: BTC-USD) ou Binance (BTCUSDT)
+    asset_id    = _asset_map[asset_label]
 
-    # En mode local : on utilise le ticker yfinance directement
-    # En mode testnet/mainnet : on convertit en symbole Binance
     if is_local:
-        symbol = asset_id   # BTC-USD, ETH-USD, ^GSPC, etc.
+        symbol = asset_id
     else:
-        # Convertir BTC-USD → BTCUSDT pour Binance (les indices ne sont pas dispo sur Binance)
         if asset_id.startswith("^"):
-            st.warning(f"⚠️ {asset_label} est un indice — non disponible sur Binance. Choisir une crypto.")
+            st.warning(f"⚠️ {asset_label} est un indice — non disponible sur Binance.")
             symbol = "BTCUSDT"
         else:
             symbol = asset_id.replace("-USD", "USDT").replace("-USDT", "USDT")
 
-    timeframe = st.selectbox("Timeframe",
-                             ["1m", "5m", "15m", "1h", "4h", "1d", "1w"] if not is_local
-                             else ["1m", "5m", "15m", "heure", "4h", "jour", "semaine"],
-                             index=3)
+    timeframe = st.selectbox(
+        "Timeframe",
+        ["1m", "5m", "15m", "1h", "4h", "1d", "1w"] if not is_local
+        else ["1m", "5m", "15m", "heure", "4h", "jour", "semaine"],
+        index=3,
+    )
 
 with cfg2:
     if is_local:
@@ -149,41 +192,33 @@ with cfg3:
 
     st.markdown("**⏱️ Timing du check**")
     timing_mode = st.radio(
-        "Mode",
-        ["Intervalle (minutes)", "Heure fixe UTC"],
-        horizontal=True,
-        key="bot_timing_mode",
+        "Mode", ["Intervalle (minutes)", "Heure fixe UTC"],
+        horizontal=True, key="bot_timing_mode",
     )
     check_time_utc = None
     interval_min   = None
     if timing_mode == "Heure fixe UTC":
         check_time_utc = st.text_input(
-            "Heure UTC (HH:MM)",
-            value="00:01",
-            help="Le bot se déclenche chaque jour à cette heure UTC. "
-                 "France = UTC+1 en hiver, UTC+2 en été. "
-                 "00:01 UTC = 01:01 en hiver / 02:01 en été en France.",
+            "Heure UTC (HH:MM)", value="00:01",
+            help="France = UTC+1 hiver / UTC+2 été",
         )
-        st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été (heure française)")
+        st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été")
     else:
         interval_min = st.number_input(
             "Intervalle (minutes)", 1, 1440, 15, 1,
-            help="Le bot vérifie toutes les X minutes",
+            help="Le bot vérifie toutes les X minutes synchronisé sur les heures rondes UTC",
         )
 
 st.divider()
 
-# ── Bloc indicateurs — même présentation que app.py ──────────────────────
 with st.container(border=True):
-    label_entry = "🟢 Indicateurs d'achat" if not is_short else "🔴 Indicateurs d'entrée short"
-    st.markdown(f"#### {label_entry}")
+    st.markdown(f"#### {'🟢 Indicateurs d\'achat' if not is_short else '🔴 Indicateurs d\'entrée short'}")
     ind_entry = render_indicator_bloc("buy" if not is_short else "sell", "bot_entry")
 
 st.write("")
 
 with st.container(border=True):
-    label_exit = "🔴 Indicateurs de vente" if not is_short else "🟢 Indicateurs de sortie short"
-    st.markdown(f"#### {label_exit}")
+    st.markdown(f"#### {'🔴 Indicateurs de vente' if not is_short else '🟢 Indicateurs de sortie short'}")
     st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de sortie actif** — laisser vide = hold")
     ind_exit = render_indicator_bloc("sell" if not is_short else "buy", "bot_exit")
 
@@ -212,19 +247,13 @@ with c1:
             "tp_pct":         tp_pct,
             "sl_pct":         sl_pct,
             "is_short":       is_short,
-            "check_time_utc": check_time_utc,   # heure UTC fixe ex: "00:01"
-            "interval_min":   interval_min,      # intervalle en minutes
+            "check_time_utc": check_time_utc,
+            "interval_min":   interval_min,
             "ind_entry":      ind_entry,
             "ind_exit":       ind_exit,
         }
         save_state(new_state)
-
-        bot_cmd = {
-            "local":   "python bot_local.py",
-            "testnet": "python bot_testnet.py",
-            "mainnet": "python bot_mainnet.py",
-        }[new_state["mode"]]
-
+        bot_cmd = {"local": "python bot_local.py", "testnet": "python bot_testnet.py", "mainnet": "python bot_mainnet.py"}[new_state["mode"]]
         st.success(f"✅ Config sauvegardée — Lance maintenant : `{bot_cmd}`")
         st.rerun()
 
@@ -248,7 +277,7 @@ with c4:
             reset()
             st.rerun()
 
-# Bouton forcer clôture — sur une ligne à part car action critique
+# Bouton forcer clôture — visible seulement si position ouverte
 pos = get_state().get("position")
 if pos:
     st.warning(f"⚠️ Position ouverte : {pos.get('side')} {pos.get('symbol')} @ {pos.get('entry_price'):.2f}$")
@@ -256,33 +285,29 @@ if pos:
     with col_close:
         if st.button("🔴 Forcer clôture", type="primary"):
             if is_local:
-                # En local : on simule la clôture au dernier prix connu
                 s          = get_state()
                 last_price = s.get("last_price") or pos["entry_price"]
                 pnl_pct    = (last_price - pos["entry_price"]) / pos["entry_price"] * 100
                 pnl_usd    = round(pos["qty"] * last_price - pos["size_usdt"], 2)
-                s["balance"] += pos["qty"] * last_price
-                s["pnl_session"] = round(s["balance"] - s.get("balance_init", 1000.0), 2)
+                s["balance"]     += pos["qty"] * last_price
+                s["pnl_session"]  = round(s["balance"] - s.get("balance_init", 1000.0), 2)
                 s["trades"].append({
-                    "ts": datetime.now().isoformat(),
-                    "symbol": pos["symbol"], "side": pos["side"],
-                    "entry_price": pos["entry_price"], "exit_price": last_price,
-                    "qty": pos["qty"], "pnl_pct": round(pnl_pct, 2),
-                    "pnl_usd": pnl_usd, "raison": "Clôture forcée",
+                    "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
+                    "side": pos["side"], "entry_price": pos["entry_price"],
+                    "exit_price": last_price, "qty": pos["qty"],
+                    "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
+                    "raison": "Clôture forcée",
                 })
                 s["position"] = None
                 save_state(s)
                 st.success(f"Position fermée @ {last_price:.2f}$ | PnL: {pnl_usd:+.2f}$")
                 st.rerun()
             else:
-                # En testnet/mainnet : passer un ordre de clôture via Binance
                 st.info("Pour le testnet/mainnet : ferme manuellement sur Binance puis clique Reset.")
 
-# Commande à lancer
 if state.get("status") == "running":
     mode_key = state.get("mode", "local")
-    bot_cmd  = f"python bot_{mode_key}.py"
-    st.info(f"🖥️ Le bot doit tourner dans un terminal : `{bot_cmd}`")
+    st.info(f"🖥️ Le bot doit tourner dans un terminal : `python bot_{mode_key}.py`")
 
 st.divider()
 
@@ -293,7 +318,6 @@ st.subheader("4️⃣ Monitoring")
 
 state = get_state()
 
-# Debug — voir le chemin du fichier et son contenu brut
 with st.expander("🔍 Debug — bot_state.json", expanded=False):
     st.caption(f"Chemin fichier : `{_bs_module.STATE_FILE}`")
     st.json(state)
@@ -307,7 +331,6 @@ with stat_col:
         st.success(f"🟢 Bot ACTIF — {mode_label}")
     else:
         st.info("⚪ Bot INACTIF")
-
     last = state.get("last_check")
     if last:
         st.caption(f"Dernier check : {str(last)[:19]}")
@@ -320,11 +343,8 @@ with pos_col:
     if pos:
         entry     = pos["entry_price"]
         cur_price = state.get("last_price") or entry
-        if not pos.get("is_short"):
-            pnl_pct = (float(cur_price) - entry) / entry * 100
-        else:
-            pnl_pct = (entry - float(cur_price)) / entry * 100
-        color = "#22C55E" if pnl_pct >= 0 else "#EF4444"
+        pnl_pct   = (float(cur_price) - entry) / entry * 100 if not pos.get("is_short") else (entry - float(cur_price)) / entry * 100
+        color     = "#22C55E" if pnl_pct >= 0 else "#EF4444"
         st.markdown(
             f"**{pos['symbol']}** — {pos['side']}  \n"
             f"Entrée : `{entry:.4f}` | Actuel : `{float(cur_price):.4f}`  \n"
@@ -335,19 +355,18 @@ with pos_col:
         st.info("Aucune position ouverte")
 
 with pnl_col:
-    pnl    = state.get("pnl_session", 0.0)
-    color  = "#22C55E" if pnl >= 0 else "#EF4444"
-    bal    = state.get("balance", 0)
+    pnl   = state.get("pnl_session", 0.0)
+    color = "#22C55E" if pnl >= 0 else "#EF4444"
+    bal   = state.get("balance", 0)
     st.markdown(
         f"**PnL Session**  \n"
         f"<span style='font-size:28px;color:{color};font-weight:bold'>{float(pnl):+.2f}</span>  \n"
         f"Capital : **{float(bal):.2f} $**",
         unsafe_allow_html=True,
     )
-    nb = len(state.get("trades", []))
-    st.caption(f"{nb} trade(s) fermé(s)")
+    st.caption(f"{len(state.get('trades', []))} trade(s) fermé(s)")
 
-# Historique trades
+# Historique des trades
 trades = state.get("trades", [])
 if trades:
     st.subheader("📋 Historique des trades")
@@ -358,19 +377,16 @@ if trades:
         except:
             return ""
     cols_color = [c for c in ["pnl_usd", "pnl_pct"] if c in df_t.columns]
-    if cols_color:
-        st.dataframe(df_t.style.map(color_pnl, subset=cols_color), width='stretch')
-    else:
-        st.dataframe(df_t, width='stretch')
+    st.dataframe(df_t.style.map(color_pnl, subset=cols_color) if cols_color else df_t, width='stretch')
 
-# Log
+# Log du bot
 log_lines = state.get("log", [])
 if log_lines:
     with st.expander("📋 Log du bot", expanded=True):
         for line in reversed(log_lines[-30:]):
             st.caption(line)
 
-# Auto-refresh si actif
+# Auto-refresh toutes les 30s si le bot est actif
 if state.get("status") == "running":
     st.caption("🔄 Rafraîchissement dans 30s")
     time.sleep(30)
