@@ -5,6 +5,7 @@ venv/
 *venv311
 *venv/
 *venv311/
+env/
 
 # Variables d'environnement
 .env
