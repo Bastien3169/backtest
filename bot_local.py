@@ -150,7 +150,7 @@ def run():
             if state.get("status") != "running":
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} En attente...")
                 first_run = True   # reset pour le prochain démarrage
-                time.sleep(10)
+                time.sleep(3600)
                 continue
 
             # ── Lire la config depuis le JSON (écrite par Streamlit) ───────

@@ -10,6 +10,7 @@ Mainnet : https://binance.com (clé payante, vrai argent)
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from binance.client import Client
 
 load_dotenv()
 
@@ -45,7 +46,6 @@ class BinanceClient:
     """
 
     def __init__(self, testnet: bool = True):
-        from binance.client import Client
         self.testnet = testnet
         if testnet:
             api_key = os.getenv("BINANCE_TESTNET_API_KEY", "")

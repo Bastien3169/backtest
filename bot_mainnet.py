@@ -148,7 +148,7 @@ def run():
             # ── Bot en pause ───────────────────────────────────────────────
             if state.get("status") != "running":
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] En attente (status=stopped)...")
-                time.sleep(10)
+                time.sleep(3600)
                 continue
 
             # ── Connexion Binance ──────────────────────────────────────────
