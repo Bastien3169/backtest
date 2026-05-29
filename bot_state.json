@@ -1,5 +1,5 @@
 {
-  "status": "running",
+  "status": "stopped",
   "mode": "testnet",
   "position": null,
   "balance": 1000.0,
