@@ -1,0 +1,16 @@
+{
+  "status": "stopped",
+  "mode": "local",
+  "position": null,
+  "balance": 1000.0,
+  "balance_init": 1000.0,
+  "trades": [],
+  "log": [
+    "[2026-05-27 23:08:38] [TESTNET_LONG] \ud83e\uddea Bot TESTNET d\u00e9marr\u00e9",
+    "[2026-05-27 23:22:04] [TESTNET_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
+  ],
+  "strategy": {},
+  "last_check": null,
+  "last_price": null,
+  "pnl_session": 0.0
+}

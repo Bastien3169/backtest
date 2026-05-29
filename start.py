@@ -24,9 +24,11 @@ BOTS_CONFIG_FILE = os.path.join(os.getenv("DATA_DIR", "."), "bots_config.json")
 DEFAULT_BOTS = [
     {"bot_file": "bot_local.py",   "config": "bot_state_local_long.json",    "active": True},
     {"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
+
     # Décommenter quand tu as les clés API Binance testnet
     {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_long.json",  "active": True},
     #{"bot_file": "bot_testnet.py", "config": "bot_state_testnet_short.json", "active": True},
+    
     # Décommenter seulement quand tu es prêt pour le vrai argent
     # {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_long.json",  "active": True},
     # {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_short.json", "active": True},

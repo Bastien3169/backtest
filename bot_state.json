@@ -1,20 +1,20 @@
 {
   "status": "running",
-  "mode": "local",
+  "mode": "testnet",
   "position": null,
   "balance": 1000.0,
   "balance_init": 1000.0,
   "trades": [],
   "log": [],
   "strategy": {
-    "symbol": "BTC-USD",
-    "timeframe": "heure",
+    "symbol": "BTCUSDT",
+    "timeframe": "1h",
     "size_pct": 100,
-    "tp_pct": 5.0,
-    "sl_pct": 2.5,
+    "tp_pct": 7.0,
+    "sl_pct": 2.0,
     "is_short": false,
-    "check_time_utc": null,
-    "interval_min": 2,
+    "check_time_utc": "00:01",
+    "interval_min": null,
     "ind_entry": {
       "use_rsi": false,
       "rsi_period": 14,
@@ -28,19 +28,15 @@
         "down",
         "flat"
       ],
-      "mm_align_periods": [
-        10,
-        20,
-        50
-      ],
+      "mm_align_periods": [],
       "mm_cross_a": null,
       "mm_cross_b": null,
       "btc_cross_period": null,
       "use_macd": false,
-      "use_bollinger": false,
-      "bollinger_band": null,
+      "use_bollinger": true,
+      "bollinger_band": "basse",
       "bollinger_mode": "etat",
-      "bollinger_confirm": false
+      "bollinger_confirm": true
     },
     "ind_exit": {
       "use_rsi": false,
