@@ -1,0 +1,19 @@
+{
+  "bots": [
+    {
+      "bot_file": "bot_local.py",
+      "config": "bot_state_local_long.json",
+      "active": true
+    },
+    {
+      "bot_file": "bot_local.py",
+      "config": "bot_state_local_short.json",
+      "active": true
+    },
+    {
+      "bot_file": "bot_testnet.py",
+      "config": "bot_state_testnet_long.json",
+      "active": true
+    }
+  ]
+}

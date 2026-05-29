@@ -102,7 +102,7 @@ st.subheader("1️⃣ Mode de trading")
 
 mode = st.radio(
     "Mode",
-    ["🖥️ Local (simulation)", "🧪 Testnet Binance (faux argent)", "💰 Mainnet Binance (vrai argent)"],
+    ["🖥️ Local (simulation)", "🧪 Testnet Binance (faux argent)", "💰 Mainnet Hyperliquid (vrai argent)"],
     horizontal=True,
 )
 is_local   = "Local"   in mode
@@ -114,17 +114,17 @@ if is_local:
 elif is_testnet:
     st.info("**Mode Testnet** — Binance testnet, clé gratuite, faux argent. Lance `python bot_testnet.py`")
 else:
-    st.error("**⚠️ Mode Mainnet — VRAI ARGENT.** Lance `python bot_mainnet.py` dans un terminal.")
+    st.error("**⚠️ Mode Mainnet Hyperliquid — VRAI ARGENT.** Lance `python bot_mainnet.py` dans un terminal.")
 
-if not is_local:
-    with st.expander("🔑 Connexion Binance", expanded=False):
-        api_key = os.getenv("BINANCE_TESTNET_API_KEY" if is_testnet else "BINANCE_API_KEY")
+# Connexion Binance testnet
+if is_testnet:
+    with st.expander("🔑 Connexion Binance Testnet", expanded=False):
+        api_key = os.getenv("BINANCE_TESTNET_API_KEY")
         if api_key:
             st.success("✅ Clés chargées depuis `.env`")
         else:
             st.warning("Clés manquantes dans `.env`")
-            if is_testnet:
-                st.markdown("""
+            st.markdown("""
 1. Aller sur [testnet.binance.vision](https://testnet.binance.vision)
 2. Connexion GitHub → Generate HMAC_SHA256 Key
 3. Ajouter dans `.env` :
@@ -133,11 +133,43 @@ BINANCE_TESTNET_API_KEY=...
 BINANCE_TESTNET_SECRET_KEY=...
 ```
 """)
-        if st.button("🔌 Tester la connexion"):
+        if st.button("🔌 Tester la connexion Binance"):
             try:
-                client = BinanceClient(testnet=is_testnet)
+                client = BinanceClient(testnet=True)
                 res    = client.test_connection()
-                st.success(res["message"]) if res["ok"] else st.error(res["message"])
+                if res["ok"]:
+                    st.success(res["message"])
+                else:
+                    st.error(res["message"])
+            except Exception as e:
+                st.error(str(e))
+
+# Connexion Hyperliquid mainnet
+if is_mainnet:
+    with st.expander("🔑 Connexion Hyperliquid", expanded=False):
+        hl_key = os.getenv("HL_PRIVATE_KEY")
+        if hl_key:
+            st.success("✅ Clés HL chargées depuis `.env`")
+        else:
+            st.warning("Clés manquantes dans `.env`")
+            st.markdown("""
+1. Aller sur [app.hyperliquid.xyz](https://app.hyperliquid.xyz)
+2. Connecter MetaMask → Settings → API Keys → Generate
+3. Ajouter dans Railway Variables :
+```
+HL_PRIVATE_KEY=0x...
+HL_WALLET_ADDRESS=0x...
+```
+""")
+        if st.button("🔌 Tester la connexion Hyperliquid"):
+            try:
+                from src.utils.hyperliquid_client import HyperliquidClient
+                client_hl = HyperliquidClient()
+                res       = client_hl.test_connection()
+                if res["ok"]:
+                    st.success(res["message"])
+                else:
+                    st.error(res["message"])
             except Exception as e:
                 st.error(str(e))
 

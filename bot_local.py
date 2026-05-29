@@ -49,7 +49,7 @@ _basename  = os.path.basename(args.config)   # garde juste le nom du fichier
 BOT_PREFIX = "[" + _basename.replace("bot_state_", "").replace(".json", "").upper() + "]"
 
 # Debug — chemin exact du fichier JSON utilisé par ce bot
-print(f"[{BOT_PREFIX}] Fichier JSON : {_bs.STATE_FILE}")
+print(f"{BOT_PREFIX} Fichier JSON : {_bs.STATE_FILE}")
 
 # Raccourcis
 get_state  = _bs.get_state
@@ -148,9 +148,9 @@ def run():
 
             # En attente tant que status != "running"
             if state.get("status") != "running":
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} En attente...")
-                first_run = True   # reset pour le prochain démarrage
-                time.sleep(10)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} En attente (status=stopped)...")
+                first_run = True
+                time.sleep(3600)
                 continue
 
             # ── Lire la config depuis le JSON (écrite par Streamlit) ───────
@@ -309,7 +309,6 @@ def run():
                 max_logs=5000)
 
             if first_run:
-                # Premier cycle : on a déjà vérifié le signal — on dort maintenant
                 first_run = False
 
             time.sleep(sleep_sec)
