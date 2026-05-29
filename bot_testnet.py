@@ -135,7 +135,7 @@ def run():
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] {BOT_PREFIX} En attente...")
                 first_run = True
                 client    = None   # reset connexion si on repart
-                time.sleep(3600)
+                time.sleep(10)
                 continue
 
             # ── Connexion Binance testnet — seulement quand running ────────

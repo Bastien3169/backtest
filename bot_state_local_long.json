@@ -16,7 +16,15 @@
     "[2026-05-11 16:43:38] [LOCAL_LONG] \u2714\ufe0f En ligne | BTCUSDT | heure | Position: Ferm\u00e9e | Prochain check \u00e0 14:45:15 UTC",
     "[2026-05-11 16:43:38] [LOCAL_LONG] LONG | BTCUSDT | heure | Equity: 1000.00$ | PnL session: +0.00$ | 0 trades | Position: Ferm\u00e9e",
     "[2026-05-11 16:43:38] [LOCAL_LONG] \ud83d\udca4 Prochain check \u00e0 14:45:15 UTC (dans 0h 1min 37s)",
-    "[2026-05-11 16:43:51] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
+    "[2026-05-11 16:43:51] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)",
+    "[2026-05-27 23:08:38] [LOCAL_LONG] \ud83e\udd16 Bot LOCAL d\u00e9marr\u00e9",
+    "[2026-05-27 23:08:38] [LOCAL_LONG] \u2714\ufe0f En ligne | BTCUSDT | heure | Position: Ferm\u00e9e | Prochain check \u00e0 21:15:15 UTC",
+    "[2026-05-27 23:08:39] [LOCAL_LONG] LONG | BTCUSDT | heure | Equity: 1000.00$ | PnL session: +0.00$ | 0 trades | Position: Ferm\u00e9e",
+    "[2026-05-27 23:08:39] [LOCAL_LONG] \ud83d\udca4 Prochain check \u00e0 21:15:15 UTC (dans 0h 6min 36s)",
+    "[2026-05-27 23:15:15] [LOCAL_LONG] \u2714\ufe0f En ligne | BTCUSDT | heure | Position: Ferm\u00e9e | Prochain check \u00e0 21:30:15 UTC",
+    "[2026-05-27 23:15:15] [LOCAL_LONG] LONG | BTCUSDT | heure | Equity: 1000.00$ | PnL session: +0.00$ | 0 trades | Position: Ferm\u00e9e",
+    "[2026-05-27 23:15:15] [LOCAL_LONG] \ud83d\udca4 Prochain check \u00e0 21:30:15 UTC (dans 0h 15min 0s)",
+    "[2026-05-27 23:22:04] [LOCAL_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
   ],
   "strategy": {
     "symbol": "BTC-USD",
@@ -78,7 +86,7 @@
       "bollinger_confirm": false
     }
   },
-  "last_check": "2026-05-11T16:43:38.824199",
-  "last_price": 81072.01,
+  "last_check": "2026-05-27T23:15:15.911480",
+  "last_price": 75274.58,
   "pnl_session": 0.0
 }
