@@ -180,6 +180,10 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("2️⃣ Configuration")
 
+# Direction en premier — avant les colonnes
+direction = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="bot_dir")
+is_short  = direction == "🔴 Short"
+
 cfg1, cfg2, cfg3 = st.columns(3)
 
 with cfg1:
@@ -220,24 +224,14 @@ with cfg2:
         except Exception:
             _hl_balance = 0.0
         st.metric("Solde HL", f"{_hl_balance:.2f} USDC")
-        _col_pct, _col_usd = st.columns(2)
-        with _col_pct:
-            size_pct = st.number_input("% du solde", 1, 100, 10, 1, key="size_pct_hl")
-        with _col_usd:
-            _usd_default = round(_hl_balance * size_pct / 100, 2)
-            _usd_saisi   = st.number_input("USDC par trade", 1.0, max(float(_hl_balance), 1.0), float(_usd_default), 1.0, key="size_usd_hl")
-            if _hl_balance > 0:
-                size_pct = round(_usd_saisi / _hl_balance * 100)
-        st.caption(f"→ {_hl_balance * size_pct / 100:.2f} USDC par trade")
+        size_pct = st.number_input("% du solde par trade", 1, 100, 10, 1, key="size_pct_hl")
+        st.metric("USDC par trade", f"{_hl_balance * size_pct / 100:.2f} USDC")
         capital  = 0.0
 
     else:  # testnet
         size_pct = st.number_input("% du solde par trade", 1, 100, 95, 1)
         capital  = 0.0
         st.caption("Solde réel chargé depuis Binance testnet")
-
-    direction = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="bot_dir")
-    is_short  = direction == "🔴 Short"
 
 with cfg3:
     tp_pct = st.number_input("Take Profit (%)", 0.0, 100.0, 5.0, 0.5)
