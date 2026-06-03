@@ -176,6 +176,8 @@ def run():
                 "rsi_period":       ind_entry.get("rsi_period", 14),
                 "use_macd":         ind_entry.get("use_macd", False) or ind_exit.get("use_macd", False),
                 "use_bollinger":    ind_entry.get("use_bollinger", False) or ind_exit.get("use_bollinger", False),
+                "bollinger_period":  ind_entry.get("bollinger_period", 20),
+                "bollinger_std":     ind_entry.get("bollinger_std", 2.0),
                 "btc_mm":           None,
                 "mm_align_periods": ind_entry.get("mm_align_periods", []),
             })

@@ -89,35 +89,69 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         st.markdown("**📊 Bollinger**")
         use_bollinger = st.checkbox("Activer", key=f"{key_prefix}_boll")
         if use_bollinger:
-            bollinger_band = st.radio(
-                "Bande",
-                ["haute", "basse"],
-                format_func=lambda x: "Haute 🔴" if x == "haute" else "Basse 🟢",
-                key=f"{key_prefix}_boll_band",
-                horizontal=True)
+            # Paramètres MM et écart type
+            _bcol1, _bcol2 = st.columns(2)
+            with _bcol1:
+                boll_period = st.number_input(
+                    "Période MM", 2, 200, 20, 1,
+                    key=f"{key_prefix}_boll_period",
+                    help="Période de la moyenne mobile (défaut: 20)")
+            with _bcol2:
+                boll_std = st.number_input(
+                    "Écart type", 0.5, 5.0, 2.0, 0.5,
+                    key=f"{key_prefix}_boll_std",
+                    help="Nombre d'écarts types (défaut: 2.0)")
+
+            # Condition d'entrée — 4 choix indépendants
+            BOLL_CONDITIONS = {
+                "gt_haute":  "close > bande haute ↑",
+                "lt_haute":  "close < bande haute ↓",
+                "gt_basse":  "close > bande basse ↑",
+                "lt_basse":  "close < bande basse ↓",
+            }
+            bollinger_cond = st.selectbox(
+                "Condition",
+                list(BOLL_CONDITIONS.keys()),
+                format_func=lambda x: BOLL_CONDITIONS[x],
+                key=f"{key_prefix}_boll_cond",
+            )
+            # bollinger_band reste pour compatibilité avec le reste du code
+            bollinger_band = "haute" if "haute" in bollinger_cond else "basse"
+
             boll_mode = st.radio(
                 "Mode signal",
-                ["etat", "franchissement"],
-                format_func=lambda x: "📍 État (close sous/dessus la bande)" if x == "etat" else "↗ Franchissement (1 bougie uniquement)",
+                ["etat", "franchissement", "suivi"],
+                format_func=lambda x: {
+                    "etat": "📍 État",
+                    "franchissement": "↗ Franchissement (1 bougie)",
+                    "suivi": "🔄 Suivi (entrée ET sortie)",
+                }[x],
                 key=f"{key_prefix}_boll_mode",
                 horizontal=True)
+
             if boll_mode == "etat":
                 boll_confirm = st.checkbox(
                     "1ère bougie seulement",
                     key=f"{key_prefix}_boll_confirm",
-                    help="Achat uniquement si T-1 était dans la bande — évite les runs prolongés",
+                    help="Signal uniquement sur la 1ère bougie qui franchit — évite les runs prolongés",
                 )
                 if boll_confirm:
-                    st.caption("✅ T-1 dans la bande ET T en sort → achat open[T+1]")
+                    st.caption(f"✅ T-1 dans la bande ET T vérifie : {BOLL_CONDITIONS[bollinger_cond]}")
                 else:
-                    st.caption("Close[T] < bande → achat open[T+1]")
+                    st.caption(f"Signal : {BOLL_CONDITIONS[bollinger_cond]}")
+            elif boll_mode == "suivi":
+                boll_confirm = False
+                st.caption(f"✅ Entrée : {BOLL_CONDITIONS[bollinger_cond]}")
             else:
                 boll_confirm = False
-                st.caption("Signal uniquement sur la bougie qui franchit la bande")
+                st.caption(f"Franchissement de la condition : {BOLL_CONDITIONS[bollinger_cond]}")
         else:
             bollinger_band = None
+            bollinger_cond = None
             boll_mode      = "etat"
             boll_confirm   = False
+            boll_period    = 20
+            boll_std       = 2.0
 
     st.write("")
 
@@ -173,7 +207,10 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         "btc_cross_period": btc_cross_period,
         "use_macd":         use_macd,
         "use_bollinger":    use_bollinger,
-        "bollinger_band":   bollinger_band,
-        "bollinger_mode":   boll_mode if use_bollinger else "etat",
+        "bollinger_band":    bollinger_band,
+        "bollinger_cond":    bollinger_cond if use_bollinger else None,
+        "bollinger_mode":    boll_mode if use_bollinger else "etat",
         "bollinger_confirm": boll_confirm if use_bollinger else False,
+        "bollinger_period":  boll_period if use_bollinger else 20,
+        "bollinger_std":     boll_std if use_bollinger else 2.0,
     }
