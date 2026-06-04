@@ -118,36 +118,68 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
         else:
             conditions.append((prev_macd >= prev_sig) & (df["macd"] < df["macd_signal"]))
 
-    # ── Bollinger — franchissement OU état selon le choix utilisateur ────
-    bollinger_band = cfg.get("bollinger_band")
-    bollinger_mode = cfg.get("bollinger_mode", "etat")
+    # ── Bollinger — état / franchissement / suivi ────────────────────────
+    bollinger_cond    = cfg.get("bollinger_cond")
+    bollinger_band    = cfg.get("bollinger_band")    # compatibilité ancienne config
+    bollinger_mode    = cfg.get("bollinger_mode", "etat")
     bollinger_confirm = cfg.get("bollinger_confirm", False)
-    if cfg.get("use_bollinger") and bollinger_band and "bb_upper" in df.columns:
+
+    if cfg.get("use_bollinger") and "bb_upper" in df.columns:
+
+        # Résoudre la colonne et le sens selon bollinger_cond (nouveau)
+        # ou bollinger_band (ancien format)
+        def _boll_condition(cond_key):
+            """Retourne la Series bool correspondant à bollinger_cond."""
+            if cond_key == "gt_haute":
+                return df["close"] > df["bb_upper"]
+            elif cond_key == "lt_haute":
+                return df["close"] < df["bb_upper"]
+            elif cond_key == "gt_basse":
+                return df["close"] > df["bb_lower"]
+            elif cond_key == "lt_basse":
+                return df["close"] < df["bb_lower"]
+            # fallback ancien format
+            elif bollinger_band == "haute":
+                return df["close"] > df["bb_upper"]
+            else:
+                return df["close"] < df["bb_lower"]
+
+        def _boll_prev_inside(cond_key):
+            """Retourne True si T-1 était dans la bande (pour bollinger_confirm)."""
+            if cond_key in ("gt_haute", "lt_haute"):
+                return df["close"].shift(1) <= df["bb_upper"].shift(1)
+            else:
+                return df["close"].shift(1) >= df["bb_lower"].shift(1)
+
+        def _boll_franchissement(cond_key):
+            """Retourne le signal de franchissement ponctuel."""
+            prev = df["close"].shift(1)
+            if cond_key == "gt_haute":
+                return (prev <= df["bb_upper"].shift(1)) & (df["close"] > df["bb_upper"])
+            elif cond_key == "lt_haute":
+                return (prev >= df["bb_upper"].shift(1)) & (df["close"] < df["bb_upper"])
+            elif cond_key == "gt_basse":
+                return (prev <= df["bb_lower"].shift(1)) & (df["close"] > df["bb_lower"])
+            elif cond_key == "lt_basse":
+                return (prev >= df["bb_lower"].shift(1)) & (df["close"] < df["bb_lower"])
+            # fallback ancien format
+            elif bollinger_band == "haute":
+                return (prev <= df["bb_upper"].shift(1)) & (df["close"] > df["bb_upper"])
+            else:
+                return (prev >= df["bb_lower"].shift(1)) & (df["close"] < df["bb_lower"])
+
         if bollinger_mode == "franchissement":
-            # Signal ponctuel : la bougie T franchit la bande
-            prev_close = df["close"].shift(1)
-            if bollinger_band == "haute":
-                prev_upper = df["bb_upper"].shift(1)
-                conditions.append((prev_close <= prev_upper) & (df["close"] > df["bb_upper"]))
-            else:
-                prev_lower = df["bb_lower"].shift(1)
-                conditions.append((prev_close >= prev_lower) & (df["close"] < df["bb_lower"]))
-        else:
-            # Signal état : close sous/dessus la bande
-            if bollinger_band == "haute":
-                cond = df["close"] > df["bb_upper"]
-            else:
-                cond = df["close"] < df["bb_lower"]
+            conditions.append(_boll_franchissement(bollinger_cond))
 
+        elif bollinger_mode == "suivi":
+            # Mode suivi : la condition choisie sert à la fois pour l'entrée et la sortie
+            # L'indicateur de sortie doit avoir la condition inverse
+            conditions.append(_boll_condition(bollinger_cond))
+
+        else:  # etat
+            cond = _boll_condition(bollinger_cond)
             if bollinger_confirm:
-                # Filtre : seulement si T-1 était à l'intérieur de la bande
-                # = première bougie qui sort (évite les runs prolongés)
-                if bollinger_band == "haute":
-                    prev_was_inside = df["close"].shift(1) <= df["bb_upper"].shift(1)
-                else:
-                    prev_was_inside = df["close"].shift(1) >= df["bb_lower"].shift(1)
-                cond = cond & prev_was_inside
-
+                cond = cond & _boll_prev_inside(bollinger_cond)
             conditions.append(cond)
 
     # ── Croisement actif vs MM BTC — croisement sur bougie T (pas de shift interne)
@@ -201,6 +233,8 @@ def run_backtest_single(
         "rsi_period":       ind_achat.get("rsi_period") or ind_vente.get("rsi_period") or 14,
         "use_macd":         bool(ind_achat.get("use_macd")) or bool(ind_vente.get("use_macd")),
         "use_bollinger":    bool(ind_achat.get("use_bollinger")) or bool(ind_vente.get("use_bollinger")),
+        "bollinger_period": ind_achat.get("bollinger_period", 20) or ind_vente.get("bollinger_period", 20),
+        "bollinger_std":    ind_achat.get("bollinger_std", 2.0) or ind_vente.get("bollinger_std", 2.0),
         "btc_mm":           btc_mm,
         "mm_align_periods": list(set(
             ind_achat.get("mm_align_periods", []) +
