@@ -33,7 +33,7 @@ load_dotenv(os.path.join(_ROOT, ".env"))
 # Imports internes (src/)
 # ---------------------------------------------------------------------------
 import src.utils.bot_state as _bs_module
-from src.utils.binance_client import BinanceClient, BINANCE_SYMBOLS
+from src.utils.binance_client import BinanceClient
 from src.utils.data_loader import get_all_assets
 from src.views.indicator_bloc import render_indicator_bloc
 
@@ -234,14 +234,9 @@ with cfg2:
         st.caption("Solde réel chargé depuis Binance testnet")
 
 with cfg3:
-    tp_pct = st.number_input("Take Profit (%)", 0.0, 100.0, 5.0, 0.5)
-    sl_pct = st.number_input("Stop Loss (%)", 0.0, 50.0, 2.5, 0.5)
-    tp_pct = tp_pct if tp_pct > 0 else None
-    sl_pct = sl_pct if sl_pct > 0 else None
-
-    st.markdown("**⏱️ Timing du check**")
+    st.markdown("**⏱️ Timing**")
     timing_mode = st.radio(
-        "Mode", ["Intervalle (minutes)", "Heure fixe UTC"],
+        "Mode", ["Intervalle (min)", "Heure fixe UTC"],
         horizontal=True, key="bot_timing_mode",
     )
     check_time_utc = None
@@ -255,7 +250,7 @@ with cfg3:
     else:
         interval_min = st.number_input(
             "Intervalle (minutes)", 1, 1440, 15, 1,
-            help="Le bot vérifie toutes les X minutes synchronisé sur les heures rondes UTC",
+            help="Synchronisé sur les heures rondes UTC",
         )
 
 st.divider()
@@ -269,6 +264,13 @@ st.write("")
 with st.container(border=True):
     st.markdown(f"#### {'🔴 Indicateurs de vente' if not is_short else '🟢 Indicateurs de sortie short'}")
     st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de sortie actif** — laisser vide = hold")
+    _tp_col, _sl_col = st.columns(2)
+    with _tp_col:
+        tp_pct = st.number_input("Take Profit (%)", 0.0, 100.0, 5.0, 0.5, key="bot_tp")
+        tp_pct = tp_pct if tp_pct > 0 else None
+    with _sl_col:
+        sl_pct = st.number_input("Stop Loss (%)", 0.0, 50.0, 2.5, 0.5, key="bot_sl")
+        sl_pct = sl_pct if sl_pct > 0 else None
     ind_exit = render_indicator_bloc("sell" if not is_short else "buy", "bot_exit")
 
 st.divider()
@@ -435,8 +437,4 @@ if log_lines:
         for line in reversed(log_lines[-30:]):
             st.caption(line)
 
-# Auto-refresh toutes les 30s si le bot est actif
-if state.get("status") == "running":
-    st.caption("🔄 Rafraîchissement dans 30s")
-    time.sleep(30)
-    st.rerun()
+# Pas d'auto-refresh — utilise le bouton 🔄 Rafraîchir
