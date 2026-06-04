@@ -174,7 +174,7 @@ def apply_all_indicators(df: pd.DataFrame, config: dict) -> pd.DataFrame:
         df = add_macd(df)
 
     if config.get("use_bollinger"):
-        df = add_bollinger(df)
+        df = add_bollinger(df, period=config.get("bollinger_period", 20), std_dev=config.get("bollinger_std", 2.0))
 
     if config.get("btc_mm") is not None:
         df = add_btc_mm(df, config["btc_mm"])
