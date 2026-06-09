@@ -10,6 +10,7 @@ if _ROOT not in sys.path:
 
 import streamlit as st
 import pandas as pd
+from datetime import date, timedelta
 
 from src.utils.data_loader import fetch_ohlcv, get_all_assets
 from src.controllers.backtest import run_backtest_single
@@ -19,10 +20,8 @@ st.set_page_config(page_title="Scanner", page_icon="🤖", layout="wide")
 st.title("🤖 Scanner — Cryptos & Indices")
 st.caption("Configure une stratégie, choisis tes actifs, compare les résultats.")
 
-MM_LABELS = [1, 10, 20, 50, 100, 200]
-
 # ---------------------------------------------------------------------------
-# Sélection des actifs
+# 1️⃣ Sélection des actifs
 # ---------------------------------------------------------------------------
 st.subheader("1️⃣ Sélection des actifs")
 
@@ -64,13 +63,11 @@ st.caption(f"{len(selected_tickers)} actif(s) sélectionné(s)")
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Paramètres généraux
+# 2️⃣ Paramètres généraux
 # ---------------------------------------------------------------------------
 st.subheader("2️⃣ Paramètres généraux")
 
-from datetime import date, timedelta
-
-pg1, pg2 = st.columns(2)
+pg1, pg2, pg3 = st.columns(3)
 with pg1:
     timeframe  = st.selectbox("Temporalité", ["jour", "heure", "semaine", "mois"])
     mode_duree = st.radio("Mode période",
@@ -79,6 +76,14 @@ with pg1:
 with pg2:
     capital   = st.number_input("Capital (€)", min_value=1.0, value=1000.0, step=100.0)
     frais_pct = st.number_input("Frais (%)", 0.0, 10.0, 0.1, 0.01, format="%.2f")
+with pg3:
+    is_short = st.radio(
+        "Direction",
+        ["🟢 Long", "🔴 Short"],
+        horizontal=True, key="scan_direction"
+    ) == "🔴 Short"
+    if is_short:
+        st.info("🔴 Mode Short — signal d'entrée = vente à découvert")
 
 durees      = [360]
 date_ranges = []
@@ -142,13 +147,16 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Indicateurs
 # ---------------------------------------------------------------------------
-st.markdown("#### 🟢 Indicateurs d'achat")
-ind_achat = render_indicator_bloc("buy", "scan_buy")
+label_entry = "🟢 Indicateurs d'achat" if not is_short else "🔴 Indicateurs d'entrée short"
+label_exit  = "🔴 Indicateurs de vente" if not is_short else "🟢 Indicateurs de sortie short"
+
+st.markdown(f"#### {label_entry}")
+ind_achat = render_indicator_bloc("buy" if not is_short else "sell", "scan_buy")
 
 st.divider()
 
-st.markdown("#### 🔴 Indicateurs de vente")
-st.caption("Laisser vide = mode hold")
+st.markdown(f"#### {label_exit}")
+st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de sortie actif** — laisser vide = hold")
 cv1, cv2 = st.columns(2)
 with cv1:
     tp_raw = st.number_input("Take Profit (%)", 0.0, 1000.0, 0.0, 0.5, help="0 = désactivé", key="scan_tp")
@@ -156,22 +164,21 @@ with cv2:
     sl_raw = st.number_input("Stop Loss (%)", 0.0, 100.0, 0.0, 0.5, help="0 = désactivé", key="scan_sl")
 tp_pct = tp_raw if tp_raw > 0 else None
 sl_pct = sl_raw if sl_raw > 0 else None
-ind_vente = render_indicator_bloc("sell", "scan_sell")
+ind_vente = render_indicator_bloc("sell" if not is_short else "buy", "scan_sell")
 
 st.divider()
 
 # Construction de la stratégie
-ind_achat["btc_mm"] = None
-ind_vente["btc_mm"] = None
 strategy = {
     "ind_achat": ind_achat,
     "ind_vente": ind_vente,
     "tp_pct":    tp_pct,
     "sl_pct":    sl_pct,
+    "is_short":  is_short,
 }
 
 # ---------------------------------------------------------------------------
-# Lancement du scan
+# 3️⃣ Lancement du scan
 # ---------------------------------------------------------------------------
 st.subheader("3️⃣ Lancer le scan")
 
@@ -185,8 +192,8 @@ if st.button("🚀 Lancer le scan", type="primary"):
         prog.progress((idx + 1) / total, text=f"Analyse {ticker} ({idx+1}/{total})...")
 
         try:
-            df = fetch_ohlcv(ticker, timeframe)
-            row = {"Crypto": label}
+            df  = fetch_ohlcv(ticker, timeframe)
+            row = {"Crypto": label, "Direction": "Short 🔴" if is_short else "Long 🟢"}
 
             for i, d in enumerate(durees):
                 dr = date_ranges[i] if mode_duree == "Plages de dates" and i < len(date_ranges) else None
@@ -195,16 +202,16 @@ if st.button("🚀 Lancer le scan", type="primary"):
                     capital=capital, frais_pct=frais_pct,
                     duree=d, date_range=dr,
                 )
-                # Label colonne
                 if dr:
                     col_label = f"{dr[0].strftime('%d/%m/%y')}→{dr[1].strftime('%d/%m/%y')}"
                 else:
                     col_label = f"{d}j"
 
-                row[f"Rendement {col_label} (%)"] = res["rendement_pct"]
-                row[f"B&H {col_label} (%)"]       = res["bnh_rendement"]
-                row[f"Trades {col_label}"]         = res["nb_trades"]
-                row[f"Win rate {col_label} (%)"]   = res["win_rate"]
+                bnh_label = "S&H" if is_short else "B&H"
+                row[f"Rendement {col_label} (%)"]       = res["rendement_pct"]
+                row[f"{bnh_label} {col_label} (%)"]     = res["bnh_rendement"]
+                row[f"Trades {col_label}"]               = res["nb_trades"]
+                row[f"Win rate {col_label} (%)"]         = res["win_rate"]
 
             results.append(row)
         except Exception as e:
@@ -219,12 +226,13 @@ if st.button("🚀 Lancer le scan", type="primary"):
 
     if results:
         df_res = pd.DataFrame(results)
-        # Trier par la première colonne de rendement disponible
         rend_cols = [c for c in df_res.columns if "Rendement" in c]
         if rend_cols:
             df_res = df_res.sort_values(rend_cols[0], ascending=False)
         st.session_state["scan_results"] = df_res
-        st.success(f"✅ Scan terminé — {len(results)} cryptos analysées")
+        st.success(f"✅ Scan terminé — {len(results)} actifs analysés")
+    else:
+        st.error("❌ Aucun résultat — tous les actifs ont échoué")
 
 # ---------------------------------------------------------------------------
 # Résultats
@@ -232,23 +240,31 @@ if st.button("🚀 Lancer le scan", type="primary"):
 if "scan_results" in st.session_state:
     df_res = st.session_state["scan_results"]
 
-    # Colonnes de rendement pour colorisation
     rend_cols = [c for c in df_res.columns if "Rendement" in c]
 
-    sort_col = st.selectbox("Trier par", df_res.columns[1:], index=0, key="scan_sort")
-    asc      = st.radio("Ordre", ["↓ Décroissant", "↑ Croissant"],
-                        horizontal=True, key="scan_asc") == "↑ Croissant"
-    df_res   = df_res.sort_values(sort_col, ascending=asc)
+    # Tri
+    col_sort, col_order, col_clear = st.columns([3, 2, 1])
+    with col_sort:
+        sort_col = st.selectbox("Trier par", df_res.columns[1:], index=0, key="scan_sort")
+    with col_order:
+        asc = st.radio("Ordre", ["↓ Décroissant", "↑ Croissant"],
+                       horizontal=True, key="scan_asc") == "↑ Croissant"
+    with col_clear:
+        st.write("")
+        if st.button("🗑️ Effacer", key="scan_clear_results"):
+            del st.session_state["scan_results"]
+            st.rerun()
+
+    df_res = df_res.sort_values(sort_col, ascending=asc)
 
     def color_val(val):
         if not isinstance(val, (int, float)):
             return ""
         return f"color: {'#22C55E' if val > 0 else '#EF4444' if val < 0 else '#888'}"
 
-    # Format numérique pour toutes les colonnes sauf Crypto et Trades
     fmt_dict = {}
     for c in df_res.columns:
-        if c == "Crypto":
+        if c in ("Crypto", "Direction"):
             continue
         elif "Trades" in c:
             fmt_dict[c] = "{:.0f}"
@@ -260,15 +276,19 @@ if "scan_results" in st.session_state:
         .format(fmt_dict)
         .map(color_val, subset=rend_cols)
     )
-    st.dataframe(styled, width='stretch', height=600)
+    # Hauteur adaptative selon le nombre de lignes
+    height = min(100 + len(df_res) * 35, 800)
+    st.dataframe(styled, width='stretch', height=height)
 
-    st.subheader("🏆 Top 5 — Meilleur rendement")
-    if rend_cols:
-        top_col = rend_cols[0]
-        for _, row in df_res.nlargest(5, top_col).iterrows():
-            color = "#22C55E" if row[top_col] > 0 else "#EF4444"
+    # Top 5 — suit le tri actuel
+    st.subheader(f"🏆 Top 5 — {sort_col}")
+    if sort_col in df_res.columns:
+        top_df = df_res.nlargest(5, sort_col) if not asc else df_res.nsmallest(5, sort_col)
+        for _, row in top_df.iterrows():
+            val   = row[sort_col]
+            color = "#22C55E" if val > 0 else "#EF4444"
             st.markdown(
-                f"**{row['Crypto']}** — "
-                f"<span style='color:{color}'>{row[top_col]:+.2f}%</span>",
+                f"**{row['Crypto']}** ({row.get('Direction', '')}) — "
+                f"<span style='color:{color}'>{val:+.2f}%</span>",
                 unsafe_allow_html=True,
             )
