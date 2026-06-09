@@ -408,11 +408,23 @@ with pos_col:
 with pnl_col:
     pnl   = state.get("pnl_session", 0.0)
     color = "#22C55E" if pnl >= 0 else "#EF4444"
-    bal   = state.get("balance", 0)
+    # En mainnet → solde réel depuis HL
+    # En local/testnet → solde depuis le JSON
+    if state.get("mode") == "mainnet":
+        try:
+            from src.utils.hyperliquid_client import HyperliquidClient
+            bal = HyperliquidClient().get_balance()
+            bal_label = "USDC"
+        except Exception:
+            bal = state.get("balance", 0)
+            bal_label = "$"
+    else:
+        bal = state.get("balance", 0)
+        bal_label = "$"
     st.markdown(
         f"**PnL Session**  \n"
         f"<span style='font-size:28px;color:{color};font-weight:bold'>{float(pnl):+.2f}</span>  \n"
-        f"Capital : **{float(bal):.2f} $**",
+        f"Capital : **{float(bal):.2f} {bal_label}**",
         unsafe_allow_html=True,
     )
     st.caption(f"{len(state.get('trades', []))} trade(s) fermé(s)")
