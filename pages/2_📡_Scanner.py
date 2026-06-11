@@ -278,11 +278,11 @@ if "scan_results" in st.session_state:
     )
     # Hauteur adaptative selon le nombre de lignes
     height = min(100 + len(df_res) * 35, 800)
-    st.dataframe(styled, width='stretch', height=height)
+    st.dataframe(styled, use_container_width=True, height=height)
 
-    # Top 5 — suit le tri actuel
+    # Top 5 — suit le tri actuel (uniquement sur colonnes numériques)
     st.subheader(f"🏆 Top 5 — {sort_col}")
-    if sort_col in df_res.columns:
+    if sort_col in df_res.columns and pd.api.types.is_numeric_dtype(df_res[sort_col]):
         top_df = df_res.nlargest(5, sort_col) if not asc else df_res.nsmallest(5, sort_col)
         for _, row in top_df.iterrows():
             val   = row[sort_col]
