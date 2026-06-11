@@ -1,7 +1,6 @@
 """
 start.py
-Lance Streamlit + les bots configurés dans bots_config.json.
-La liste des bots actifs est gérée depuis Streamlit (page BotLive).
+Lance Streamlit + les bots définis dans DEFAULT_BOTS.
 Redémarre automatiquement si crash.
 
 Sur Railway : Start Command = python start.py
@@ -14,55 +13,28 @@ import time
 import subprocess
 
 # Force tout le monde à travailler depuis le même dossier
-# = dossier où se trouve start.py
-# Sans ça, bot_local et Streamlit peuvent avoir des dossiers courants différents
-# et ne pas lire le même bot_state.json
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-BOTS_CONFIG_FILE = os.path.join(os.getenv("DATA_DIR", "."), "bots_config.json")
-
 DEFAULT_BOTS = [
-    #{"bot_file": "bot_local.py",   "config": "bot_state_local_long.json",    "active": True},
-    #{"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
+    # ── Local (simulation) ────────────────────────────────────────────────
+    # {"bot_file": "bot_local.py",   "config": "bot_state_local_long.json",    "active": True},
+    # {"bot_file": "bot_local.py",   "config": "bot_state_local_short.json",   "active": True},
 
-    # Décommenter quand tu as les clés API Binance testnet
-    #{"bot_file": "bot_testnet.py", "config": "bot_state_testnet_long.json",  "active": True},
-    #{"bot_file": "bot_testnet.py", "config": "bot_state_testnet_short.json", "active": True},
-    
-    # Décommenter seulement quand tu es prêt pour le vrai argent
+    # ── Testnet Binance ───────────────────────────────────────────────────
+    # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_long.json",  "active": True},
+    # {"bot_file": "bot_testnet.py", "config": "bot_state_testnet_short.json", "active": True},
+
+    # ── Mainnet Hyperliquid — VRAI ARGENT ─────────────────────────────────
     {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_long.json",  "active": True},
-    {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_short.json", "active": True},
+    {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_short.json", "active": False},
 ]
 
 
-def read_bots_config() -> list:
-    """Lit la liste des bots depuis bots_config.json."""
-    try:
-        with open(BOTS_CONFIG_FILE) as f:
-            return json.load(f).get("bots", DEFAULT_BOTS)
-    except Exception:
-        return DEFAULT_BOTS
-
-
-def write_bots_config(bots: list):
-    """Écrit la liste des bots dans bots_config.json."""
-    with open(BOTS_CONFIG_FILE, "w") as f:
-        json.dump({"bots": bots}, f, indent=2)
-
-
 def init_files():
-    """Crée les fichiers manquants au démarrage dans DATA_DIR."""
+    """Crée les fichiers JSON d'état manquants au démarrage."""
     data_dir = os.getenv("DATA_DIR", os.path.abspath("."))
-    os.makedirs(data_dir, exist_ok=True)   # crée /data si inexistant
+    os.makedirs(data_dir, exist_ok=True)
 
-    # Créer bots_config.json si absent
-    global BOTS_CONFIG_FILE
-    BOTS_CONFIG_FILE = os.path.join(data_dir, "bots_config.json")
-    if not os.path.exists(BOTS_CONFIG_FILE):
-        write_bots_config(DEFAULT_BOTS)
-        print(f"[start.py] bots_config.json créé dans {data_dir}")
-
-    # Créer les fichiers JSON d'état manquants
     default_state = {
         "status": "stopped", "mode": "local", "position": None,
         "balance": 1000.0, "balance_init": 1000.0, "trades": [],
@@ -95,24 +67,22 @@ def start_services():
     active_processes = {}
 
     while True:
-        # Relire la config à chaque cycle
-        bots = read_bots_config()
+        data_dir = os.getenv("DATA_DIR", os.path.abspath("."))
 
         # Arrêter les bots devenus inactifs
         for config, proc in list(active_processes.items()):
-            bot_cfg = next((b for b in bots if b["config"] == config), None)
+            bot_cfg = next((b for b in DEFAULT_BOTS if b["config"] == config), None)
             if not bot_cfg or not bot_cfg.get("active"):
                 print(f"[start.py] Arrêt {config}...")
                 proc.terminate()
                 del active_processes[config]
 
         # Démarrer les nouveaux bots actifs
-        for bot_cfg in bots:
+        for bot_cfg in DEFAULT_BOTS:
             if not bot_cfg.get("active"):
                 continue
-            config     = bot_cfg["config"]
-            data_dir   = os.getenv("DATA_DIR", os.path.abspath("."))
-            config_path = os.path.join(data_dir, config)   # chemin complet
+            config      = bot_cfg["config"]
+            config_path = os.path.join(data_dir, config)
             if config not in active_processes or active_processes[config].poll() is not None:
                 if config in active_processes:
                     print(f"[start.py] ⚠️ {config} crashé — relancement...")
@@ -120,7 +90,7 @@ def start_services():
                     print(f"[start.py] Lancement {bot_cfg['bot_file']} --config {config_path}")
                 active_processes[config] = subprocess.Popen([
                     sys.executable, bot_cfg["bot_file"],
-                    "--config", config_path   # chemin complet
+                    "--config", config_path
                 ])
 
         # Vérifier Streamlit
