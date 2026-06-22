@@ -52,6 +52,11 @@ else:
 _basename  = os.path.basename(args.config)
 BOT_PREFIX = "[" + _basename.replace("bot_state_", "").replace(".json", "").upper() + "]"
 
+# Détecter le side (long/short) depuis le nom du fichier config
+# "bot_state_mainnet_short.json" → side = "short"
+# "bot_state_mainnet_long.json"  → side = "long"
+_hl_side = "short" if "short" in _basename.lower() else "long"
+
 print(f"{BOT_PREFIX} Fichier JSON : {_bs.STATE_FILE}")
 
 get_state  = _bs.get_state
@@ -130,7 +135,7 @@ def run():
 
             # ── Connexion HL — seulement quand running ─────────────────────
             if client is None:
-                client = HyperliquidClient()
+                client = HyperliquidClient(side=_hl_side)
                 res    = client.test_connection()
                 if not res["ok"]:
                     log(f"{BOT_PREFIX} ⚠️ Connexion HL impossible : {res['message']} — réessai dans 60s",
@@ -176,10 +181,13 @@ def run():
                 "rsi_period":       ind_entry.get("rsi_period", 14),
                 "use_macd":         ind_entry.get("use_macd", False) or ind_exit.get("use_macd", False),
                 "use_bollinger":    ind_entry.get("use_bollinger", False) or ind_exit.get("use_bollinger", False),
-                "bollinger_period":  ind_entry.get("bollinger_period", 20),
-                "bollinger_std":     ind_entry.get("bollinger_std", 2.0),
+                "bollinger_period": ind_entry.get("bollinger_period", 20),
+                "bollinger_std":    ind_entry.get("bollinger_std", 2.0),
                 "btc_mm":           None,
-                "mm_align_periods": ind_entry.get("mm_align_periods", []),
+                "mm_align_periods": list(set(
+                    ind_entry.get("mm_align_periods", []) +
+                    ind_exit.get("mm_align_periods", [])
+                )),
             })
 
             # ── 4. Signal sur bougie T fermée (iloc[-2]) ───────────────────

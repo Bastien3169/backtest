@@ -84,9 +84,14 @@ st.title("📈 Bot Trading — Monitoring")
 # Sélecteur de bot — en tout premier pour que get_state/save_state
 # utilisent le bon fichier JSON dès le début de la page
 # ---------------------------------------------------------------------------
-_data_dir    = os.getenv("DATA_DIR", os.path.abspath("."))
+_data_dir    = os.getenv("DATA_DIR", _ROOT)
 _json_files  = sorted(glob.glob(os.path.join(_data_dir, "bot_state*.json")))
-_json_labels = [os.path.basename(f) for f in _json_files] or ["bot_state_local_long.json"]
+
+if not _json_files:
+    st.error(f"⚠️ Aucun fichier `bot_state*.json` trouvé dans `{_data_dir}`. Lance d'abord `python start.py`.")
+    st.stop()
+
+_json_labels = [os.path.basename(f) for f in _json_files]
 
 _selected_json        = st.selectbox("📂 Bot à configurer / monitorer", _json_labels, index=0)
 _bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
@@ -164,7 +169,8 @@ HL_WALLET_ADDRESS=0x...
         if st.button("🔌 Tester la connexion Hyperliquid"):
             try:
                 from src.utils.hyperliquid_client import HyperliquidClient
-                client_hl = HyperliquidClient()
+                _side_test = "short" if "short" in _selected_json.lower() else "long"
+                client_hl = HyperliquidClient(side=_side_test)
                 res       = client_hl.test_connection()
                 if res["ok"]:
                     st.success(res["message"])
@@ -217,10 +223,11 @@ with cfg2:
         st.caption(f"→ {capital * size_pct / 100:.2f} $ par trade")
 
     elif is_mainnet:
-        # Afficher le vrai solde HL
+        # Afficher le vrai solde HL — détecter le side depuis le JSON sélectionné
+        _side_cfg = "short" if "short" in _selected_json.lower() else "long"
         try:
             from src.utils.hyperliquid_client import HyperliquidClient
-            _hl_balance = HyperliquidClient().get_balance()
+            _hl_balance = HyperliquidClient(side=_side_cfg).get_balance()
         except Exception:
             _hl_balance = 0.0
         st.metric("Solde HL", f"{_hl_balance:.2f} USDC")
@@ -410,10 +417,11 @@ with pnl_col:
     color = "#22C55E" if pnl >= 0 else "#EF4444"
     # En mainnet → solde réel depuis HL
     # En local/testnet → solde depuis le JSON
-    if state.get("mode") == "mainnet":
+    if "mainnet" in _selected_json.lower():
         try:
             from src.utils.hyperliquid_client import HyperliquidClient
-            bal = HyperliquidClient().get_balance()
+            _side_mon = "short" if "short" in _selected_json.lower() else "long"
+            bal = HyperliquidClient(side=_side_mon).get_balance()
             bal_label = "USDC"
         except Exception:
             bal = state.get("balance", 0)
