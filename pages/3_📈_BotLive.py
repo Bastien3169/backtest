@@ -320,11 +320,53 @@ with c2:
         s = get_state()
         s["status"] = "stopped"
         save_state(s)
+        pos_check = s.get("position")
+        if pos_check and is_mainnet:
+            st.warning("⚠️ Bot arrêté mais position toujours ouverte sur HL — utilise '🔴 Arrêter + Fermer' pour tout couper.")
         st.rerun()
 
 with c3:
     if st.button("🔄 Rafraîchir"):
         st.rerun()
+
+# Bouton Arrêter + Fermer — visible seulement en mainnet avec position ouverte ET bot running
+_pos_check = get_state().get("position")
+if is_mainnet and _pos_check and state.get("status") == "running":
+    st.warning(f"⚠️ Position ouverte : {_pos_check.get('side')} {_pos_check.get('symbol')} @ {_pos_check.get('entry_price'):.2f}$")
+    st.caption("Arrête le bot ET ferme la position sur HL")
+    if st.button("🔴 Arrêter + Fermer position", type="primary"):
+        try:
+            from src.utils.hyperliquid_client import HyperliquidClient
+            _side_af = "short" if "short" in _selected_json.lower() else "long"
+            _client_af = HyperliquidClient(side=_side_af)
+            _symbol_af = _pos_check.get("symbol", "BTC")
+            _qty_af    = _pos_check.get("qty", 0)
+            _is_short_af = _pos_check.get("is_short", False)
+            if _is_short_af:
+                res = _client_af.close_short(_symbol_af, _qty_af)
+            else:
+                res = _client_af.sell(_symbol_af, _qty_af)
+            if res and res["ok"]:
+                fill = res.get("fill_price") or _pos_check["entry_price"]
+                pnl_pct = (fill - _pos_check["entry_price"]) / _pos_check["entry_price"] * 100 if not _is_short_af else (_pos_check["entry_price"] - fill) / _pos_check["entry_price"] * 100
+                pnl_usd = round(_pos_check["qty"] * fill - _pos_check.get("size_usdt", 0), 2) if not _is_short_af else round(_pos_check.get("size_usdt", 0) - _pos_check["qty"] * fill, 2)
+                s = get_state()
+                s["status"] = "stopped"
+                s["trades"].append({
+                    "ts": datetime.now().isoformat(), "symbol": _pos_check["symbol"],
+                    "side": _pos_check["side"], "entry_price": _pos_check["entry_price"],
+                    "exit_price": fill, "qty": _pos_check["qty"],
+                    "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
+                    "raison": "Arrêt + Clôture forcée",
+                })
+                s["position"] = None
+                save_state(s)
+                st.success(f"✅ Bot arrêté + Position fermée @ {fill:.2f}$ | PnL: {pnl_usd:+.2f}$")
+                st.rerun()
+            else:
+                st.error(f"❌ Échec clôture HL : {res}")
+        except Exception as e:
+            st.error(f"❌ Erreur : {e}")
 
 with c4:
     if st.button("🗑️ Reset session"):
@@ -341,6 +383,7 @@ if pos:
     st.warning(f"⚠️ Position ouverte : {pos.get('side')} {pos.get('symbol')} @ {pos.get('entry_price'):.2f}$")
     col_close, _ = st.columns([1, 3])
     with col_close:
+        st.caption("Ferme la position sur HL — le bot continue de chercher un nouveau signal")
         if st.button("🔴 Forcer clôture", type="primary"):
             if is_local:
                 s          = get_state()
@@ -360,8 +403,41 @@ if pos:
                 save_state(s)
                 st.success(f"Position fermée @ {last_price:.2f}$ | PnL: {pnl_usd:+.2f}$")
                 st.rerun()
+            elif is_mainnet:
+                # Fermer la position sur HL
+                try:
+                    from src.utils.hyperliquid_client import HyperliquidClient
+                    _side_close = "short" if "short" in _selected_json.lower() else "long"
+                    _client_close = HyperliquidClient(side=_side_close)
+                    _symbol_close = pos.get("symbol", "BTC")
+                    _qty_close    = pos.get("qty", 0)
+                    _is_short_pos = pos.get("is_short", False)
+                    if _is_short_pos:
+                        res = _client_close.close_short(_symbol_close, _qty_close)
+                    else:
+                        res = _client_close.sell(_symbol_close, _qty_close)
+                    if res and res["ok"]:
+                        fill = res.get("fill_price") or pos["entry_price"]
+                        pnl_pct = (fill - pos["entry_price"]) / pos["entry_price"] * 100 if not _is_short_pos else (pos["entry_price"] - fill) / pos["entry_price"] * 100
+                        pnl_usd = round(pos["qty"] * fill - pos.get("size_usdt", 0), 2) if not _is_short_pos else round(pos.get("size_usdt", 0) - pos["qty"] * fill, 2)
+                        s = get_state()
+                        s["trades"].append({
+                            "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
+                            "side": pos["side"], "entry_price": pos["entry_price"],
+                            "exit_price": fill, "qty": pos["qty"],
+                            "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
+                            "raison": "Clôture forcée",
+                        })
+                        s["position"] = None
+                        save_state(s)
+                        st.success(f"✅ Position fermée sur HL @ {fill:.2f}$ | PnL: {pnl_usd:+.2f}$")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Échec clôture HL : {res}")
+                except Exception as e:
+                    st.error(f"❌ Erreur : {e}")
             else:
-                st.info("Pour le testnet/mainnet : ferme manuellement sur Binance puis clique Reset.")
+                st.info("Pour le testnet : ferme manuellement sur Binance puis clique Reset.")
 
 if state.get("status") == "running":
     mode_key = state.get("mode", "local")

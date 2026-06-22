@@ -1,6 +1,6 @@
 {
   "status": "stopped",
-  "mode": "testnet",
+  "mode": "mainnet",
   "position": null,
   "balance": 1000.0,
   "balance_init": 1000.0,
@@ -9,12 +9,12 @@
   "strategy": {
     "symbol": "BTCUSDT",
     "timeframe": "1h",
-    "size_pct": 100,
-    "tp_pct": 7.0,
-    "sl_pct": 2.0,
+    "size_pct": 10,
+    "tp_pct": 5.0,
+    "sl_pct": 2.5,
     "is_short": false,
-    "check_time_utc": "00:01",
-    "interval_min": null,
+    "check_time_utc": null,
+    "interval_min": 15,
     "ind_entry": {
       "use_rsi": false,
       "rsi_period": 14,
@@ -33,10 +33,13 @@
       "mm_cross_b": null,
       "btc_cross_period": null,
       "use_macd": false,
-      "use_bollinger": true,
-      "bollinger_band": "basse",
+      "use_bollinger": false,
+      "bollinger_band": null,
+      "bollinger_cond": null,
       "bollinger_mode": "etat",
-      "bollinger_confirm": true
+      "bollinger_confirm": false,
+      "bollinger_period": 20,
+      "bollinger_std": 2.0
     },
     "ind_exit": {
       "use_rsi": false,
@@ -58,8 +61,11 @@
       "use_macd": false,
       "use_bollinger": false,
       "bollinger_band": null,
+      "bollinger_cond": null,
       "bollinger_mode": "etat",
-      "bollinger_confirm": false
+      "bollinger_confirm": false,
+      "bollinger_period": 20,
+      "bollinger_std": 2.0
     }
   },
   "last_check": null,
