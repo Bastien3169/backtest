@@ -9,8 +9,18 @@ Prérequis :
     pip install hyperliquid-python-sdk
 
 Clés dans Railway Variables (ou .env local) :
-    HL_PRIVATE_KEY    = clé privée du wallet API (0x...)
-    HL_WALLET_ADDRESS = adresse MetaMask principale (0x...)
+
+    Pour le bot LONG :
+        LONG_METAMASK_ADDRESS  = adresse MetaMask bot_long (0xF06b...)
+        LONG_HL_PRIVATE_KEY    = clé privée wallet API HL bot_long
+
+    Pour le bot SHORT :
+        SHORT_METAMASK_ADDRESS = adresse MetaMask bot_short (0x4Aad...)
+        SHORT_HL_PRIVATE_KEY   = clé privée wallet API HL bot_short
+
+    Ancien format encore supporté (compatibilité) :
+        HL_PRIVATE_KEY    = clé privée wallet API
+        HL_WALLET_ADDRESS = adresse MetaMask
 """
 
 # ---------------------------------------------------------------------------
@@ -70,10 +80,21 @@ class HyperliquidClient:
         order  = client.buy("BTC", size_usd=100)
     """
 
-    def __init__(self):
-        self.url     = constants.MAINNET_API_URL
-        self.pk      = os.getenv("HL_PRIVATE_KEY", "")
-        self.address = os.getenv("HL_WALLET_ADDRESS", "")
+    def __init__(self, side: str = "long"):
+        """
+        side : "long" ou "short" — détermine quelles clés utiliser.
+        Fallback sur HL_PRIVATE_KEY / HL_WALLET_ADDRESS si les nouvelles clés sont absentes.
+        """
+        self.url  = constants.MAINNET_API_URL
+        self.side = side.lower()
+
+        if self.side == "short":
+            self.pk      = os.getenv("SHORT_HL_PRIVATE_KEY") or os.getenv("HL_PRIVATE_KEY", "")
+            self.address = os.getenv("SHORT_METAMASK_ADDRESS") or os.getenv("HL_WALLET_ADDRESS", "")
+        else:
+            self.pk      = os.getenv("LONG_HL_PRIVATE_KEY") or os.getenv("HL_PRIVATE_KEY", "")
+            self.address = os.getenv("LONG_METAMASK_ADDRESS") or os.getenv("HL_WALLET_ADDRESS", "")
+
         self._wallet   = Account.from_key(self.pk) if self.pk else None
         self._exchange = Exchange(
             self._wallet,

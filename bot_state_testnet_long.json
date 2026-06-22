@@ -7,7 +7,11 @@
   "trades": [],
   "log": [
     "[2026-05-27 23:08:38] [TESTNET_LONG] \ud83e\uddea Bot TESTNET d\u00e9marr\u00e9",
-    "[2026-05-27 23:22:04] [TESTNET_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
+    "[2026-05-27 23:22:04] [TESTNET_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)",
+    "[2026-06-09 20:47:54] [TESTNET_LONG] \ud83e\uddea Bot TESTNET d\u00e9marr\u00e9",
+    "[2026-06-09 20:58:43] [TESTNET_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)",
+    "[2026-06-09 20:58:48] [TESTNET_LONG] \ud83e\uddea Bot TESTNET d\u00e9marr\u00e9",
+    "[2026-06-09 20:59:48] [TESTNET_LONG] \u23f9\ufe0f Arr\u00eat\u00e9 (Ctrl+C)"
   ],
   "strategy": {},
   "last_check": null,
