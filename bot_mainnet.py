@@ -231,6 +231,23 @@ def run():
                         }
                         log(f"{BOT_PREFIX} ✅ {'LONG' if not is_short else 'SHORT'} ouvert "
                             f"@ {fill:.2f} | {size_usd:.2f} USDC", max_logs=5000)
+
+                        # ── TP/SL natifs HL — protection temps réel ────────
+                        tp_price_native = fill * (1 + tp_pct / 100) if tp_pct and not is_short else (fill * (1 - tp_pct / 100) if tp_pct else None)
+                        sl_price_native = fill * (1 - sl_pct / 100) if sl_pct and not is_short else (fill * (1 + sl_pct / 100) if sl_pct else None)
+                        if tp_price_native or sl_price_native:
+                            tpsl_res = client.set_tp_sl(
+                                asset=symbol,
+                                size=qty,
+                                is_short=is_short,
+                                tp_price=tp_price_native,
+                                sl_price=sl_price_native,
+                            )
+                            if tpsl_res["ok"]:
+                                log(f"{BOT_PREFIX} 🛡️ TP/SL natifs posés sur HL — "
+                                    f"TP: {tp_price_native:.0f}$ | SL: {sl_price_native:.0f}$", max_logs=5000)
+                            else:
+                                log(f"{BOT_PREFIX} ⚠️ Échec TP/SL natifs : {tpsl_res}", max_logs=5000)
                     else:
                         log(f"{BOT_PREFIX} ❌ Ordre échoué : {res}", max_logs=5000)
 
