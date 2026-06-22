@@ -259,6 +259,70 @@ class HyperliquidClient:
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
+    def set_tp_sl(self, asset: str, size: float, is_short: bool,
+                  tp_price: float = None, sl_price: float = None) -> dict:
+        """
+        Place des ordres TP et SL natifs sur HL — exécutés en temps réel par la plateforme.
+        Ces ordres sont indépendants du bot — ils restent actifs même si le bot s'arrête.
+
+        asset    : "BTC", "ETH"...
+        size     : quantité de l'asset (qty de la position)
+        is_short : True si position short, False si long
+        tp_price : prix de take profit (None = pas de TP)
+        sl_price : prix de stop loss (None = pas de SL)
+        """
+        results = {}
+        try:
+            # Pour un LONG : TP = vente au-dessus, SL = vente en-dessous
+            # Pour un SHORT : TP = achat en-dessous, SL = achat au-dessus
+            is_buy_to_close = is_short  # pour fermer un short on achète
+
+            if tp_price:
+                tp_price_int = int(tp_price)
+                tp_result = self._exchange.order(
+                    asset,
+                    is_buy_to_close,
+                    size,
+                    tp_price_int,
+                    {
+                        "trigger": {
+                            "triggerPx": tp_price_int,
+                            "isMarket": True,
+                            "tpsl": "tp",
+                        }
+                    },
+                    reduce_only=True,
+                )
+                results["tp"] = tp_result
+                tp_ok = tp_result.get("status") == "ok"
+                print(f"TP natif @ {tp_price_int} : {'✅' if tp_ok else '❌'} {tp_result}")
+
+            if sl_price:
+                sl_price_int = int(sl_price)
+                sl_result = self._exchange.order(
+                    asset,
+                    is_buy_to_close,
+                    size,
+                    sl_price_int,
+                    {
+                        "trigger": {
+                            "triggerPx": sl_price_int,
+                            "isMarket": True,
+                            "tpsl": "sl",
+                        }
+                    },
+                    reduce_only=True,
+                )
+                results["sl"] = sl_result
+                sl_ok = sl_result.get("status") == "ok"
+                print(f"SL natif @ {sl_price_int} : {'✅' if sl_ok else '❌'} {sl_result}")
+
+            return {"ok": True, "results": results}
+
+        except Exception as e:
+            print(f"Erreur set_tp_sl : {e}")
+            return {"ok": False, "message": str(e)}
+
     def close_short(self, asset: str, size: float) -> dict:
         """
         Ferme une position SHORT (achat avec reduce_only=True).
