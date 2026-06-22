@@ -278,7 +278,7 @@ if "scan_results" in st.session_state:
     )
     # Hauteur adaptative selon le nombre de lignes
     height = min(100 + len(df_res) * 35, 800)
-    st.dataframe(styled, use_container_width=True, height=height)
+    st.dataframe(styled, width='stretch', height=height)
 
     # Top 5 — suit le tri actuel (uniquement sur colonnes numériques)
     st.subheader(f"🏆 Top 5 — {sort_col}")

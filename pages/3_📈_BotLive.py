@@ -417,7 +417,7 @@ with pnl_col:
     color = "#22C55E" if pnl >= 0 else "#EF4444"
     # En mainnet → solde réel depuis HL
     # En local/testnet → solde depuis le JSON
-    if state.get("mode") == "mainnet":
+    if "mainnet" in _selected_json.lower():
         try:
             from src.utils.hyperliquid_client import HyperliquidClient
             _side_mon = "short" if "short" in _selected_json.lower() else "long"
@@ -448,7 +448,7 @@ if trades:
         except:
             return ""
     cols_color = [c for c in ["pnl_usd", "pnl_pct"] if c in df_t.columns]
-    st.dataframe(df_t.style.map(color_pnl, subset=cols_color) if cols_color else df_t, use_container_width=True)
+    st.dataframe(df_t.style.map(color_pnl, subset=cols_color) if cols_color else df_t, width='stretch')
 
 # Log du bot
 log_lines = state.get("log", [])
