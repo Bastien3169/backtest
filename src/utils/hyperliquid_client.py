@@ -214,8 +214,11 @@ class HyperliquidClient:
             result   = self._exchange.order(
                 asset, True, size, limit_px, {"limit": {"tif": "Ioc"}}
             )
-            ok = result.get("status") == "ok"
-            return {"ok": ok, "data": result, "fill_price": price}
+            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+            has_error = any("error" in s for s in statuses)
+            ok = result.get("status") == "ok" and not has_error
+            return {"ok": ok, "data": result, "fill_price": price,
+                    "error": statuses[0].get("error") if has_error else None}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -229,13 +232,18 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
+            size     = round(size, 5)      # HL exige max 5 décimales
             limit_px = int(price * 0.99)   # HL exige un entier pour BTC
             result   = self._exchange.order(
                 asset, False, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
             )
-            ok = result.get("status") == "ok"
-            return {"ok": ok, "data": result, "fill_price": price}
+            # Vérifier qu'il n'y a pas d'erreur dans les statuses
+            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+            has_error = any("error" in s for s in statuses)
+            ok = result.get("status") == "ok" and not has_error
+            return {"ok": ok, "data": result, "fill_price": price,
+                    "error": statuses[0].get("error") if has_error else None}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -254,8 +262,11 @@ class HyperliquidClient:
                 asset, False, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=False
             )
-            ok = result.get("status") == "ok"
-            return {"ok": ok, "data": result, "fill_price": price}
+            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+            has_error = any("error" in s for s in statuses)
+            ok = result.get("status") == "ok" and not has_error
+            return {"ok": ok, "data": result, "fill_price": price,
+                    "error": statuses[0].get("error") if has_error else None}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -341,12 +352,16 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
+            size     = round(size, 5)      # HL exige max 5 décimales
             limit_px = int(price * 1.01)   # HL exige un entier pour BTC
             result   = self._exchange.order(
                 asset, True, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
             )
-            ok = result.get("status") == "ok"
-            return {"ok": ok, "data": result, "fill_price": price}
+            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+            has_error = any("error" in s for s in statuses)
+            ok = result.get("status") == "ok" and not has_error
+            return {"ok": ok, "data": result, "fill_price": price,
+                    "error": statuses[0].get("error") if has_error else None}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
