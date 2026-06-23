@@ -372,7 +372,29 @@ with c4:
     if st.button("🗑️ Reset session"):
         pos = get_state().get("position")
         if pos and not is_local:
-            st.error("⚠️ Position ouverte sur l'exchange ! Ferme-la d'abord avec '🔴 Forcer clôture'")
+            # Vérifier si la position existe vraiment sur HL
+            _pos_exists_on_hl = False
+            if is_mainnet:
+                try:
+                    from src.utils.hyperliquid_client import HyperliquidClient
+                    _side_reset = "short" if "short" in _selected_json.lower() else "long"
+                    _cl = HyperliquidClient(side=_side_reset)
+                    _state_hl = _cl._post_info({"type": "clearinghouseState", "user": _cl.address})
+                    _positions = _state_hl.get("assetPositions", [])
+                    _symbol_reset = pos.get("symbol", "BTC")
+                    _pos_exists_on_hl = any(
+                        p.get("position", {}).get("coin") == _symbol_reset
+                        for p in _positions
+                    )
+                except Exception:
+                    _pos_exists_on_hl = True  # par sécurité
+
+            if _pos_exists_on_hl:
+                st.error("⚠️ Position ouverte sur HL ! Ferme-la d'abord avec '🔴 Forcer clôture'")
+            else:
+                # Position dans le JSON mais pas sur HL → reset forcé
+                reset()
+                st.rerun()
         else:
             reset()
             st.rerun()

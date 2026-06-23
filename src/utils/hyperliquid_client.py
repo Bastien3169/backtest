@@ -304,7 +304,7 @@ class HyperliquidClient:
                     tp_limit,
                     {
                         "trigger": {
-                            "triggerPx": float(tp_px),
+                            "triggerPx": str(tp_px),
                             "isMarket": True,
                             "tpsl": "tp",
                         }
@@ -326,7 +326,7 @@ class HyperliquidClient:
                     sl_limit,
                     {
                         "trigger": {
-                            "triggerPx": float(sl_px),
+                            "triggerPx": str(sl_px),
                             "isMarket": True,
                             "tpsl": "sl",
                         }
