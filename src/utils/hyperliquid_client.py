@@ -270,23 +270,30 @@ class HyperliquidClient:
         is_short : True si position short, False si long
         tp_price : prix de take profit (None = pas de TP)
         sl_price : prix de stop loss (None = pas de SL)
+
+        Format HL :
+        - triggerPx doit être une STRING
+        - limit_px doit être agressif : pour SL long → limit < trigger, pour SL short → limit > trigger
+        - grouping "positionTpsl" lie les ordres à la position
         """
         results = {}
         try:
-            # Pour un LONG : TP = vente au-dessus, SL = vente en-dessous
-            # Pour un SHORT : TP = achat en-dessous, SL = achat au-dessus
-            is_buy_to_close = is_short  # pour fermer un short on achète
+            # Pour un LONG : fermer = vendre (is_buy=False)
+            # Pour un SHORT : fermer = acheter (is_buy=True)
+            is_buy_to_close = is_short
 
             if tp_price:
-                tp_price_int = int(tp_price)
+                tp_px = int(tp_price)
+                # limit_px agressif : pour TP long on vend → limit bas / pour TP short on achète → limit haut
+                tp_limit = int(tp_px * 0.995) if not is_short else int(tp_px * 1.005)
                 tp_result = self._exchange.order(
                     asset,
                     is_buy_to_close,
                     size,
-                    tp_price_int,
+                    tp_limit,
                     {
                         "trigger": {
-                            "triggerPx": tp_price_int,
+                            "triggerPx": str(tp_px),
                             "isMarket": True,
                             "tpsl": "tp",
                         }
@@ -295,18 +302,20 @@ class HyperliquidClient:
                 )
                 results["tp"] = tp_result
                 tp_ok = tp_result.get("status") == "ok"
-                print(f"TP natif @ {tp_price_int} : {'✅' if tp_ok else '❌'} {tp_result}")
+                print(f"TP natif @ {tp_px} : {'✅' if tp_ok else '❌'} {tp_result}")
 
             if sl_price:
-                sl_price_int = int(sl_price)
+                sl_px = int(sl_price)
+                # limit_px agressif : pour SL long on vend → limit très bas / pour SL short on achète → limit très haut
+                sl_limit = int(sl_px * 0.995) if not is_short else int(sl_px * 1.005)
                 sl_result = self._exchange.order(
                     asset,
                     is_buy_to_close,
                     size,
-                    sl_price_int,
+                    sl_limit,
                     {
                         "trigger": {
-                            "triggerPx": sl_price_int,
+                            "triggerPx": str(sl_px),
                             "isMarket": True,
                             "tpsl": "sl",
                         }
@@ -315,7 +324,7 @@ class HyperliquidClient:
                 )
                 results["sl"] = sl_result
                 sl_ok = sl_result.get("status") == "ok"
-                print(f"SL natif @ {sl_price_int} : {'✅' if sl_ok else '❌'} {sl_result}")
+                print(f"SL natif @ {sl_px} : {'✅' if sl_ok else '❌'} {sl_result}")
 
             return {"ok": True, "results": results}
 
