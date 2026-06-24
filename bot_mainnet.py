@@ -208,7 +208,14 @@ def run():
                   f"Sortie: {'✅' if exit_signal else '❌'}")
 
             # ── 5. Entrée ──────────────────────────────────────────────────
-            if pos is None and entry_signal:
+            # Vérifier si on a déjà traité ce signal aujourd'hui (last_entry_date)
+            today_utc       = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            last_entry_date = state.get("last_entry_date")
+            already_checked = last_entry_date == today_utc
+
+            # first_run = True → on ne prend pas de position au premier cycle
+            # already_checked = True → signal déjà vu aujourd'hui, on attend demain
+            if pos is None and entry_signal and not first_run and not already_checked:
                 balance  = client.get_balance()
                 size_usd = balance * (size_pct / 100)
 
@@ -290,6 +297,9 @@ def run():
                             f"PnL: {pnl_usd:+.2f}$ ({pnl_pct:+.2f}%)", max_logs=5000)
                     else:
                         log(f"{BOT_PREFIX} ❌ Clôture échouée : {res}", max_logs=5000)
+
+            # ── Sauvegarder la date du check pour éviter double entrée ─────
+            state["last_entry_date"] = today_utc
 
             # ── 7. Log état final + save ───────────────────────────────────
             pos         = state.get("position")

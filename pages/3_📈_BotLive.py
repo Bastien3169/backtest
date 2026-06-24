@@ -461,6 +461,53 @@ if pos:
             else:
                 st.info("Pour le testnet : ferme manuellement sur Binance puis clique Reset.")
 
+# Bouton forcer entrée — visible seulement en mainnet, bot running, sans position
+if is_mainnet and state.get("status") == "running" and not get_state().get("position"):
+    st.divider()
+    st.markdown("**⚡ Forcer une entrée maintenant**")
+    st.caption("Ignore last_entry_date et entre immédiatement au prix du marché")
+    _force_dir = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="force_dir")
+    _force_short = _force_dir == "🔴 Short"
+    if st.button("⚡ Forcer entrée", type="primary"):
+        try:
+            from src.utils.hyperliquid_client import HyperliquidClient
+            _side_force = "short" if "short" in _selected_json.lower() else "long"
+            _client_force = HyperliquidClient(side=_side_force)
+            _bal_force = _client_force.get_balance()
+            _cfg_force = get_state().get("strategy", {})
+            _size_pct_force = _cfg_force.get("size_pct", 10)
+            _size_usd_force = _bal_force * (_size_pct_force / 100)
+            _symbol_force = _cfg_force.get("symbol", "BTCUSDT").replace("USDT", "")
+            _tp_pct_force = _cfg_force.get("tp_pct")
+            _sl_pct_force = _cfg_force.get("sl_pct")
+            if _size_usd_force < 10:
+                st.error(f"⚠️ Solde insuffisant ({_bal_force:.2f} USDC)")
+            else:
+                res = _client_force.short(_symbol_force, _size_usd_force) if _force_short else _client_force.buy(_symbol_force, _size_usd_force)
+                if res and res["ok"]:
+                    fill = res.get("fill_price", 0)
+                    qty = round(_size_usd_force / fill, 6)
+                    s = get_state()
+                    s["position"] = {
+                        "symbol": _symbol_force, "side": "SHORT" if _force_short else "LONG",
+                        "is_short": _force_short, "entry_price": fill,
+                        "qty": qty, "size_usdt": _size_usd_force,
+                        "ts": datetime.now().isoformat(),
+                    }
+                    s["last_entry_date"] = datetime.now().__class__.now().strftime("%Y-%m-%d")
+                    save_state(s)
+                    # TP/SL natifs
+                    if _tp_pct_force or _sl_pct_force:
+                        _tp_f = fill * (1 + _tp_pct_force/100) if _tp_pct_force and not _force_short else (fill * (1 - _tp_pct_force/100) if _tp_pct_force else None)
+                        _sl_f = fill * (1 - _sl_pct_force/100) if _sl_pct_force and not _force_short else (fill * (1 + _sl_pct_force/100) if _sl_pct_force else None)
+                        _client_force.set_tp_sl(_symbol_force, qty, _force_short, _tp_f, _sl_f)
+                    st.success(f"✅ {'SHORT' if _force_short else 'LONG'} ouvert @ {fill:.2f}$ | {_size_usd_force:.2f} USDC")
+                    st.rerun()
+                else:
+                    st.error(f"❌ Ordre échoué : {res}")
+        except Exception as e:
+            st.error(f"❌ Erreur : {e}")
+
 if state.get("status") == "running":
     mode_key = state.get("mode", "local")
     st.info(f"🖥️ Le bot doit tourner dans un terminal : `python bot_{mode_key}.py`")
