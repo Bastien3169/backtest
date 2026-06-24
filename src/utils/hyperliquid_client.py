@@ -289,6 +289,7 @@ class HyperliquidClient:
         """
         results = {}
         try:
+            size = round(size, 5)  # HL exige max 5 décimales pour les ordres trigger
             # Pour un LONG : fermer = vendre (is_buy=False)
             # Pour un SHORT : fermer = acheter (is_buy=True)
             is_buy_to_close = is_short
