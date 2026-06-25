@@ -145,6 +145,43 @@ def run():
                     continue
                 log(f"{BOT_PREFIX} {res['message']}", max_logs=5000)
 
+            # ── Vérification synchronisation position JSON/HL ─────────────
+            pos_json = state.get("position")
+            if pos_json:
+                try:
+                    hl_state   = client._post_info({"type": "clearinghouseState", "user": client.address})
+                    hl_positions = hl_state.get("assetPositions", [])
+                    _sym_check = pos_json.get("symbol", "BTC")
+                    pos_on_hl  = any(
+                        float(p.get("position", {}).get("szi", 0)) != 0
+                        for p in hl_positions
+                        if p.get("position", {}).get("coin") == _sym_check
+                    )
+                    if not pos_on_hl:
+                        # Position fermée par HL (SL/TP natif) sans que le bot le sache
+                        log(f"{BOT_PREFIX} 🔄 Position fermée par HL (SL/TP natif) — mise à jour JSON", max_logs=5000)
+                        # Estimer le PnL depuis le dernier prix connu
+                        _last_price = state.get("last_price") or pos_json["entry_price"]
+                        _pnl_pct = (_last_price - pos_json["entry_price"]) / pos_json["entry_price"] * 100 if not pos_json.get("is_short") else (pos_json["entry_price"] - _last_price) / pos_json["entry_price"] * 100
+                        _pnl_usd = round(pos_json["qty"] * _last_price - pos_json["size_usdt"], 2) if not pos_json.get("is_short") else round(pos_json["size_usdt"] - pos_json["qty"] * _last_price, 2)
+                        state["trades"].append({
+                            "ts": datetime.now().isoformat(),
+                            "symbol": pos_json["symbol"],
+                            "side": pos_json["side"],
+                            "entry_price": pos_json["entry_price"],
+                            "exit_price": _last_price,
+                            "qty": pos_json["qty"],
+                            "pnl_pct": round(_pnl_pct, 2),
+                            "pnl_usd": _pnl_usd,
+                            "raison": "SL/TP natif HL",
+                        })
+                        state["pnl_session"] = sum(t.get("pnl_usd", 0) for t in state["trades"])
+                        state["position"] = None
+                        save_state(state)
+                        state = get_state()
+                except Exception as e:
+                    log(f"{BOT_PREFIX} ⚠️ Erreur vérif position HL : {e}", max_logs=5000)
+
             # ── Config depuis le JSON ──────────────────────────────────────
             cfg       = state.get("strategy", {})
             symbol    = cfg.get("symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")  # BTC-USD → BTC
