@@ -582,18 +582,92 @@ with pnl_col:
     )
     st.caption(f"{len(state.get('trades', []))} trade(s) fermé(s)")
 
-# Historique des trades
-trades = state.get("trades", [])
-if trades:
-    st.subheader("📋 Historique des trades")
-    df_t = pd.DataFrame(trades)
-    def color_pnl(val):
-        try:
-            return f"color: {'#22C55E' if float(val) >= 0 else '#EF4444'}"
-        except:
-            return ""
-    cols_color = [c for c in ["pnl_usd", "pnl_pct"] if c in df_t.columns]
-    st.dataframe(df_t.style.map(color_pnl, subset=cols_color) if cols_color else df_t, width='stretch')
+# Historique des trades — depuis HL directement
+st.subheader("📋 Historique des trades")
+if "mainnet" in _selected_json.lower():
+    try:
+        from src.utils.hyperliquid_client import HyperliquidClient
+        _side_hist = "short" if "short" in _selected_json.lower() else "long"
+        _client_hist = HyperliquidClient(side=_side_hist)
+        _fills = _client_hist._post_info({"type": "userFills", "user": _client_hist.address})
+
+        # Reconstruire les trades depuis les fills
+        _trades_hl = []
+        _open_fills = {}  # coin → fill d'ouverture en attente
+
+        # Trier par time croissant
+        _fills_sorted = sorted(_fills, key=lambda x: x["time"])
+
+        for _f in _fills_sorted:
+            _coin = _f["coin"]
+            _dir  = _f.get("dir", "")
+            _px   = float(_f["px"])
+            _sz   = float(_f["sz"])
+            _ts   = pd.to_datetime(_f["time"], unit="ms")
+            _fee  = float(_f.get("fee", 0))
+
+            if "Open" in _dir:
+                _open_fills[_coin] = _f
+            elif "Close" in _dir and _coin in _open_fills:
+                _entry_fill = _open_fills.pop(_coin)
+                _entry_px   = float(_entry_fill["px"])
+                _is_long    = "Long" in _dir
+                _pnl_usd    = float(_f.get("closedPnl", 0)) - _fee - float(_entry_fill.get("fee", 0))
+                _pnl_pct    = (_px - _entry_px) / _entry_px * 100 if _is_long else (_entry_px - _px) / _entry_px * 100
+                _trades_hl.append({
+                    "Date":       _ts.strftime("%Y-%m-%d %H:%M"),
+                    "Actif":      _coin,
+                    "Direction":  "LONG" if _is_long else "SHORT",
+                    "Entrée":     _entry_px,
+                    "Sortie":     _px,
+                    "Taille":     _sz,
+                    "PnL $":      round(_pnl_usd, 2),
+                    "PnL %":      round(_pnl_pct, 2),
+                    "Raison":     _dir,
+                })
+
+        if _trades_hl:
+            _df_hl = pd.DataFrame(reversed(_trades_hl))
+            def _color_pnl(val):
+                try:
+                    return f"color: {'#22C55E' if float(val) >= 0 else '#EF4444'}; font-weight: bold"
+                except:
+                    return ""
+            st.dataframe(
+                _df_hl.style.map(_color_pnl, subset=["PnL $", "PnL %"]),
+                width='stretch'
+            )
+            # Résumé
+            _total_pnl = sum(t["PnL $"] for t in _trades_hl)
+            _nb_win    = sum(1 for t in _trades_hl if t["PnL $"] > 0)
+            _winrate   = _nb_win / len(_trades_hl) * 100 if _trades_hl else 0
+            _col1, _col2, _col3 = st.columns(3)
+            _col1.metric("Trades fermés", len(_trades_hl))
+            _col2.metric("Win rate", f"{_winrate:.0f}%")
+            _col3.metric("PnL total net", f"{_total_pnl:+.2f} USDC")
+        else:
+            st.info("Aucun trade fermé sur ce compte HL")
+    except Exception as e:
+        st.error(f"❌ Erreur chargement historique HL : {e}")
+        # Fallback sur le JSON
+        trades = state.get("trades", [])
+        if trades:
+            df_t = pd.DataFrame(trades)
+            st.dataframe(df_t, width='stretch')
+else:
+    # Mode local/testnet → depuis le JSON
+    trades = state.get("trades", [])
+    if trades:
+        df_t = pd.DataFrame(trades)
+        def color_pnl(val):
+            try:
+                return f"color: {'#22C55E' if float(val) >= 0 else '#EF4444'}"
+            except:
+                return ""
+        cols_color = [c for c in ["pnl_usd", "pnl_pct"] if c in df_t.columns]
+        st.dataframe(df_t.style.map(color_pnl, subset=cols_color) if cols_color else df_t, width='stretch')
+    else:
+        st.info("Aucun trade enregistré")
 
 # Log du bot
 log_lines = state.get("log", [])
