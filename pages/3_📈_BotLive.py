@@ -1,64 +1,37 @@
 """
-pages/4_📈_BotLive.py
+pages/3_📈_BotLive.py
 Monitoring et configuration du bot de trading.
 """
 
-# ---------------------------------------------------------------------------
-# Imports système — en premier pour que sys.path soit correct
-# avant tout import de src/
-# ---------------------------------------------------------------------------
 import sys
 import os
-import time
 import glob
 
-# Ajouter la racine du projet en premier dans sys.path
-# Sans ça, "from src.utils..." échoue car Streamlit lance depuis pages/
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# ---------------------------------------------------------------------------
-# Imports librairies externes
-# ---------------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
-import extra_streamlit_components as stx   # gestion des cookies (protection mot de passe)
+import extra_streamlit_components as stx
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_ROOT, ".env"))
 
-# ---------------------------------------------------------------------------
-# Imports internes (src/)
-# ---------------------------------------------------------------------------
 import src.utils.bot_state as _bs_module
 from src.utils.binance_client import BinanceClient
 from src.utils.data_loader import get_all_assets
 from src.views.indicator_bloc import render_indicator_bloc
 
-# ---------------------------------------------------------------------------
-# Configuration de la page
-# ---------------------------------------------------------------------------
 st.set_page_config(page_title="Bot Live", page_icon="📈", layout="wide")
 
 # ---------------------------------------------------------------------------
 # 🔒 Protection par mot de passe
-#
-# BOT_PASSWORD défini dans Railway Variables → protection active
-# Non défini (en local) → accès direct, pas de mot de passe demandé
-#
-# Pipeline :
-#   1. Streamlit lit le cookie "bot_auth" dans le navigateur
-#   2a. Cookie valide → accès direct ✅
-#   2b. Pas de cookie → affiche champ mot de passe
-#   3. Mot de passe correct → cookie créé (expire dans 30 jours) → accès ✅
-#   4. Mot de passe incorrect → message d'erreur ❌
 # ---------------------------------------------------------------------------
 BOT_PASSWORD = os.getenv("BOT_PASSWORD", "")
 
 if BOT_PASSWORD:
-    # Gestionnaire de cookies — lit/écrit dans le navigateur de l'utilisateur
     gestionnaire_cookies = stx.CookieManager(key="bot_auth_manager")
     cookie_auth = gestionnaire_cookies.get("bot_auth")
 
@@ -67,13 +40,12 @@ if BOT_PASSWORD:
         saisie = st.text_input("Mot de passe", type="password", key="saisie_mdp")
 
         if saisie == BOT_PASSWORD:
-            # Correct → créer le cookie valable 30 jours
             gestionnaire_cookies.set("bot_auth", "ok", max_age=30 * 24 * 3600)
             st.rerun()
         elif saisie:
             st.error("❌ Mot de passe incorrect")
 
-        st.stop()   # bloquer le reste de la page
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # Page principale
@@ -81,11 +53,10 @@ if BOT_PASSWORD:
 st.title("📈 Bot Trading — Monitoring")
 
 # ---------------------------------------------------------------------------
-# Sélecteur de bot — en tout premier pour que get_state/save_state
-# utilisent le bon fichier JSON dès le début de la page
+# Sélecteur de bot
 # ---------------------------------------------------------------------------
-_data_dir    = os.getenv("DATA_DIR", _ROOT)
-_json_files  = sorted(glob.glob(os.path.join(_data_dir, "bot_state*.json")))
+_data_dir   = os.getenv("DATA_DIR", _ROOT)
+_json_files = sorted(glob.glob(os.path.join(_data_dir, "bot_state*.json")))
 
 if not _json_files:
     st.error(f"⚠️ Aucun fichier `bot_state*.json` trouvé dans `{_data_dir}`. Lance d'abord `python start.py`.")
@@ -99,6 +70,14 @@ _bs_module.STATE_FILE = os.path.join(_data_dir, _selected_json)
 get_state  = _bs_module.get_state
 save_state = _bs_module.save_state
 reset      = _bs_module.reset
+
+# Détection du side depuis le nom du JSON — utilisé partout dans la page
+bot_side = "short" if "short" in _selected_json.lower() else "long"
+
+def get_hl_client():
+    """Retourne un HyperliquidClient pour le bon compte (long ou short)."""
+    from src.utils.hyperliquid_client import HyperliquidClient
+    return HyperliquidClient(side=bot_side)
 
 # ---------------------------------------------------------------------------
 # 1️⃣ Mode de trading
@@ -121,7 +100,6 @@ elif is_testnet:
 else:
     st.error("**⚠️ Mode Mainnet Hyperliquid — VRAI ARGENT.** Lance `python bot_mainnet.py` dans un terminal.")
 
-# Connexion Binance testnet
 if is_testnet:
     with st.expander("🔑 Connexion Binance Testnet", expanded=False):
         api_key = os.getenv("BINANCE_TESTNET_API_KEY")
@@ -149,7 +127,6 @@ BINANCE_TESTNET_SECRET_KEY=...
             except Exception as e:
                 st.error(str(e))
 
-# Connexion Hyperliquid mainnet
 if is_mainnet:
     with st.expander("🔑 Connexion Hyperliquid", expanded=False):
         hl_key = os.getenv("HL_PRIVATE_KEY")
@@ -168,10 +145,8 @@ HL_WALLET_ADDRESS=0x...
 """)
         if st.button("🔌 Tester la connexion Hyperliquid"):
             try:
-                from src.utils.hyperliquid_client import HyperliquidClient
-                _side_test = "short" if "short" in _selected_json.lower() else "long"
-                client_hl = HyperliquidClient(side=_side_test)
-                res       = client_hl.test_connection()
+                client_test = get_hl_client()
+                res = client_test.test_connection()
                 if res["ok"]:
                     st.success(res["message"])
                 else:
@@ -186,7 +161,6 @@ st.divider()
 # ---------------------------------------------------------------------------
 st.subheader("2️⃣ Configuration")
 
-# Direction en premier — avant les colonnes
 direction = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="bot_dir")
 is_short  = direction == "🔴 Short"
 
@@ -221,21 +195,16 @@ with cfg2:
         capital  = st.number_input("Capital fictif ($)", 100.0, 100000.0, 1000.0, 100.0)
         size_pct = st.number_input("% du capital par trade", 1, 100, 100, 1)
         st.caption(f"→ {capital * size_pct / 100:.2f} $ par trade")
-
     elif is_mainnet:
-        # Afficher le vrai solde HL — détecter le side depuis le JSON sélectionné
-        _side_cfg = "short" if "short" in _selected_json.lower() else "long"
         try:
-            from src.utils.hyperliquid_client import HyperliquidClient
-            _hl_balance = HyperliquidClient(side=_side_cfg).get_balance()
+            solde_hl = get_hl_client().get_balance()
         except Exception:
-            _hl_balance = 0.0
-        st.metric("Solde HL", f"{_hl_balance:.2f} USDC")
+            solde_hl = 0.0
+        st.metric("Solde HL", f"{solde_hl:.2f} USDC")
         size_pct = st.number_input("% du solde par trade", 1, 100, 10, 1, key="size_pct_hl")
-        st.metric("USDC par trade", f"{_hl_balance * size_pct / 100:.2f} USDC")
+        st.metric("USDC par trade", f"{solde_hl * size_pct / 100:.2f} USDC")
         capital  = 0.0
-
-    else:  # testnet
+    else:
         size_pct = st.number_input("% du solde par trade", 1, 100, 95, 1)
         capital  = 0.0
         st.caption("Solde réel chargé depuis Binance testnet")
@@ -320,8 +289,7 @@ with c2:
         s = get_state()
         s["status"] = "stopped"
         save_state(s)
-        pos_check = s.get("position")
-        if pos_check and is_mainnet:
+        if s.get("position") and is_mainnet:
             st.warning("⚠️ Bot arrêté mais position toujours ouverte sur HL — utilise '🔴 Arrêter + Fermer' pour tout couper.")
         st.rerun()
 
@@ -329,33 +297,28 @@ with c3:
     if st.button("🔄 Rafraîchir"):
         st.rerun()
 
-# Bouton Arrêter + Fermer — visible seulement en mainnet avec position ouverte ET bot running
-_pos_check = get_state().get("position")
-if is_mainnet and _pos_check and state.get("status") == "running":
-    st.warning(f"⚠️ Position ouverte : {_pos_check.get('side')} {_pos_check.get('symbol')} @ {_pos_check.get('entry_price'):.2f}$")
+# Bouton Arrêter + Fermer
+pos_ouverte = get_state().get("position")
+if is_mainnet and pos_ouverte and state.get("status") == "running":
+    st.warning(f"⚠️ Position ouverte : {pos_ouverte.get('side')} {pos_ouverte.get('symbol')} @ {pos_ouverte.get('entry_price'):.2f}$")
     st.caption("Arrête le bot ET ferme la position sur HL")
     if st.button("🔴 Arrêter + Fermer position", type="primary"):
         try:
-            from src.utils.hyperliquid_client import HyperliquidClient
-            _side_af = "short" if "short" in _selected_json.lower() else "long"
-            _client_af = HyperliquidClient(side=_side_af)
-            _symbol_af = _pos_check.get("symbol", "BTC")
-            _qty_af    = _pos_check.get("qty", 0)
-            _is_short_af = _pos_check.get("is_short", False)
-            if _is_short_af:
-                res = _client_af.close_short(_symbol_af, _qty_af)
-            else:
-                res = _client_af.sell(_symbol_af, _qty_af)
+            client_stop  = get_hl_client()
+            symbol_stop  = pos_ouverte.get("symbol", "BTC")
+            qty_stop     = pos_ouverte.get("qty", 0)
+            is_short_pos = pos_ouverte.get("is_short", False)
+            res = client_stop.close_short(symbol_stop, qty_stop) if is_short_pos else client_stop.sell(symbol_stop, qty_stop)
             if res and res["ok"]:
-                fill = res.get("fill_price") or _pos_check["entry_price"]
-                pnl_pct = (fill - _pos_check["entry_price"]) / _pos_check["entry_price"] * 100 if not _is_short_af else (_pos_check["entry_price"] - fill) / _pos_check["entry_price"] * 100
-                pnl_usd = round(_pos_check["qty"] * fill - _pos_check.get("size_usdt", 0), 2) if not _is_short_af else round(_pos_check.get("size_usdt", 0) - _pos_check["qty"] * fill, 2)
+                fill    = res.get("fill_price") or pos_ouverte["entry_price"]
+                pnl_pct = (fill - pos_ouverte["entry_price"]) / pos_ouverte["entry_price"] * 100 if not is_short_pos else (pos_ouverte["entry_price"] - fill) / pos_ouverte["entry_price"] * 100
+                pnl_usd = round(pos_ouverte["qty"] * fill - pos_ouverte.get("size_usdt", 0), 2) if not is_short_pos else round(pos_ouverte.get("size_usdt", 0) - pos_ouverte["qty"] * fill, 2)
                 s = get_state()
                 s["status"] = "stopped"
                 s["trades"].append({
-                    "ts": datetime.now().isoformat(), "symbol": _pos_check["symbol"],
-                    "side": _pos_check["side"], "entry_price": _pos_check["entry_price"],
-                    "exit_price": fill, "qty": _pos_check["qty"],
+                    "ts": datetime.now().isoformat(), "symbol": pos_ouverte["symbol"],
+                    "side": pos_ouverte["side"], "entry_price": pos_ouverte["entry_price"],
+                    "exit_price": fill, "qty": pos_ouverte["qty"],
                     "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
                     "raison": "Arrêt + Clôture forcée",
                 })
@@ -372,34 +335,30 @@ with c4:
     if st.button("🗑️ Reset session"):
         pos = get_state().get("position")
         if pos and not is_local:
-            # Vérifier si la position existe vraiment sur HL
-            _pos_exists_on_hl = False
+            position_existe_sur_hl = False
             if is_mainnet:
                 try:
-                    from src.utils.hyperliquid_client import HyperliquidClient
-                    _side_reset = "short" if "short" in _selected_json.lower() else "long"
-                    _cl = HyperliquidClient(side=_side_reset)
-                    _state_hl = _cl._post_info({"type": "clearinghouseState", "user": _cl.address})
-                    _positions = _state_hl.get("assetPositions", [])
-                    _symbol_reset = pos.get("symbol", "BTC")
-                    _pos_exists_on_hl = any(
-                        p.get("position", {}).get("coin") == _symbol_reset
-                        for p in _positions
+                    client_reset   = get_hl_client()
+                    state_hl       = client_reset._post_info({"type": "clearinghouseState", "user": client_reset.address})
+                    positions_hl   = state_hl.get("assetPositions", [])
+                    symbol_reset   = pos.get("symbol", "BTC")
+                    position_existe_sur_hl = any(
+                        p.get("position", {}).get("coin") == symbol_reset
+                        for p in positions_hl
                     )
                 except Exception:
-                    _pos_exists_on_hl = True  # par sécurité
+                    position_existe_sur_hl = True
 
-            if _pos_exists_on_hl:
+            if position_existe_sur_hl:
                 st.error("⚠️ Position ouverte sur HL ! Ferme-la d'abord avec '🔴 Forcer clôture'")
             else:
-                # Position dans le JSON mais pas sur HL → reset forcé
                 reset()
                 st.rerun()
         else:
             reset()
             st.rerun()
 
-# Bouton forcer clôture — visible seulement si position ouverte
+# Bouton Forcer clôture
 pos = get_state().get("position")
 if pos:
     st.warning(f"⚠️ Position ouverte : {pos.get('side')} {pos.get('symbol')} @ {pos.get('entry_price'):.2f}$")
@@ -412,8 +371,8 @@ if pos:
                 last_price = s.get("last_price") or pos["entry_price"]
                 pnl_pct    = (last_price - pos["entry_price"]) / pos["entry_price"] * 100
                 pnl_usd    = round(pos["qty"] * last_price - pos["size_usdt"], 2)
-                s["balance"]     += pos["qty"] * last_price
-                s["pnl_session"]  = round(s["balance"] - s.get("balance_init", 1000.0), 2)
+                s["balance"]    += pos["qty"] * last_price
+                s["pnl_session"] = round(s["balance"] - s.get("balance_init", 1000.0), 2)
                 s["trades"].append({
                     "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
                     "side": pos["side"], "entry_price": pos["entry_price"],
@@ -426,22 +385,16 @@ if pos:
                 st.success(f"Position fermée @ {last_price:.2f}$ | PnL: {pnl_usd:+.2f}$")
                 st.rerun()
             elif is_mainnet:
-                # Fermer la position sur HL
                 try:
-                    from src.utils.hyperliquid_client import HyperliquidClient
-                    _side_close = "short" if "short" in _selected_json.lower() else "long"
-                    _client_close = HyperliquidClient(side=_side_close)
-                    _symbol_close = pos.get("symbol", "BTC")
-                    _qty_close    = pos.get("qty", 0)
-                    _is_short_pos = pos.get("is_short", False)
-                    if _is_short_pos:
-                        res = _client_close.close_short(_symbol_close, _qty_close)
-                    else:
-                        res = _client_close.sell(_symbol_close, _qty_close)
+                    client_cloture  = get_hl_client()
+                    symbol_cloture  = pos.get("symbol", "BTC")
+                    qty_cloture     = pos.get("qty", 0)
+                    is_short_pos    = pos.get("is_short", False)
+                    res = client_cloture.close_short(symbol_cloture, qty_cloture) if is_short_pos else client_cloture.sell(symbol_cloture, qty_cloture)
                     if res and res["ok"]:
-                        fill = res.get("fill_price") or pos["entry_price"]
-                        pnl_pct = (fill - pos["entry_price"]) / pos["entry_price"] * 100 if not _is_short_pos else (pos["entry_price"] - fill) / pos["entry_price"] * 100
-                        pnl_usd = round(pos["qty"] * fill - pos.get("size_usdt", 0), 2) if not _is_short_pos else round(pos.get("size_usdt", 0) - pos["qty"] * fill, 2)
+                        fill    = res.get("fill_price") or pos["entry_price"]
+                        pnl_pct = (fill - pos["entry_price"]) / pos["entry_price"] * 100 if not is_short_pos else (pos["entry_price"] - fill) / pos["entry_price"] * 100
+                        pnl_usd = round(pos["qty"] * fill - pos.get("size_usdt", 0), 2) if not is_short_pos else round(pos.get("size_usdt", 0) - pos["qty"] * fill, 2)
                         s = get_state()
                         s["trades"].append({
                             "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
@@ -461,47 +414,44 @@ if pos:
             else:
                 st.info("Pour le testnet : ferme manuellement sur Binance puis clique Reset.")
 
-# Bouton forcer entrée — visible seulement en mainnet, bot running, sans position
+# Bouton Forcer entrée
 if is_mainnet and state.get("status") == "running" and not get_state().get("position"):
     st.divider()
     st.markdown("**⚡ Forcer une entrée maintenant**")
     st.caption("Ignore last_entry_date et entre immédiatement au prix du marché")
-    _force_dir = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="force_dir")
-    _force_short = _force_dir == "🔴 Short"
+    direction_forcee = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="force_dir")
+    is_short_force   = direction_forcee == "🔴 Short"
     if st.button("⚡ Forcer entrée", type="primary"):
         try:
-            from src.utils.hyperliquid_client import HyperliquidClient
-            _side_force = "short" if "short" in _selected_json.lower() else "long"
-            _client_force = HyperliquidClient(side=_side_force)
-            _bal_force = _client_force.get_balance()
-            _cfg_force = get_state().get("strategy", {})
-            _size_pct_force = _cfg_force.get("size_pct", 10)
-            _size_usd_force = _bal_force * (_size_pct_force / 100)
-            _symbol_force = _cfg_force.get("symbol", "BTCUSDT").replace("USDT", "")
-            _tp_pct_force = _cfg_force.get("tp_pct")
-            _sl_pct_force = _cfg_force.get("sl_pct")
-            if _size_usd_force < 10:
-                st.error(f"⚠️ Solde insuffisant ({_bal_force:.2f} USDC)")
+            client_entree   = get_hl_client()
+            balance_entree  = client_entree.get_balance()
+            config_entree   = get_state().get("strategy", {})
+            size_pct_entree = config_entree.get("size_pct", 10)
+            size_usd_entree = balance_entree * (size_pct_entree / 100)
+            symbol_entree   = config_entree.get("symbol", "BTCUSDT").replace("USDT", "")
+            tp_pct_entree   = config_entree.get("tp_pct")
+            sl_pct_entree   = config_entree.get("sl_pct")
+            if size_usd_entree < 10:
+                st.error(f"⚠️ Solde insuffisant ({balance_entree:.2f} USDC)")
             else:
-                res = _client_force.short(_symbol_force, _size_usd_force) if _force_short else _client_force.buy(_symbol_force, _size_usd_force)
+                res = client_entree.short(symbol_entree, size_usd_entree) if is_short_force else client_entree.buy(symbol_entree, size_usd_entree)
                 if res and res["ok"]:
                     fill = res.get("fill_price", 0)
-                    qty = round(_size_usd_force / fill, 6)
-                    s = get_state()
+                    qty  = round(size_usd_entree / fill, 6)
+                    s    = get_state()
                     s["position"] = {
-                        "symbol": _symbol_force, "side": "SHORT" if _force_short else "LONG",
-                        "is_short": _force_short, "entry_price": fill,
-                        "qty": qty, "size_usdt": _size_usd_force,
+                        "symbol": symbol_entree, "side": "SHORT" if is_short_force else "LONG",
+                        "is_short": is_short_force, "entry_price": fill,
+                        "qty": qty, "size_usdt": size_usd_entree,
                         "ts": datetime.now().isoformat(),
                     }
-                    s["last_entry_date"] = datetime.now().__class__.now().strftime("%Y-%m-%d")
+                    s["last_entry_date"] = datetime.now().strftime("%Y-%m-%d")
                     save_state(s)
-                    # TP/SL natifs
-                    if _tp_pct_force or _sl_pct_force:
-                        _tp_f = fill * (1 + _tp_pct_force/100) if _tp_pct_force and not _force_short else (fill * (1 - _tp_pct_force/100) if _tp_pct_force else None)
-                        _sl_f = fill * (1 - _sl_pct_force/100) if _sl_pct_force and not _force_short else (fill * (1 + _sl_pct_force/100) if _sl_pct_force else None)
-                        _client_force.set_tp_sl(_symbol_force, qty, _force_short, _tp_f, _sl_f)
-                    st.success(f"✅ {'SHORT' if _force_short else 'LONG'} ouvert @ {fill:.2f}$ | {_size_usd_force:.2f} USDC")
+                    if tp_pct_entree or sl_pct_entree:
+                        tp_prix = fill * (1 + tp_pct_entree/100) if tp_pct_entree and not is_short_force else (fill * (1 - tp_pct_entree/100) if tp_pct_entree else None)
+                        sl_prix = fill * (1 - sl_pct_entree/100) if sl_pct_entree and not is_short_force else (fill * (1 + sl_pct_entree/100) if sl_pct_entree else None)
+                        client_entree.set_tp_sl(symbol_entree, qty, is_short_force, tp_prix, sl_prix)
+                    st.success(f"✅ {'SHORT' if is_short_force else 'LONG'} ouvert @ {fill:.2f}$ | {size_usd_entree:.2f} USDC")
                     st.rerun()
                 else:
                     st.error(f"❌ Ordre échoué : {res}")
@@ -560,19 +510,15 @@ with pos_col:
 with pnl_col:
     pnl   = state.get("pnl_session", 0.0)
     color = "#22C55E" if pnl >= 0 else "#EF4444"
-    # En mainnet → solde réel depuis HL
-    # En local/testnet → solde depuis le JSON
     if "mainnet" in _selected_json.lower():
         try:
-            from src.utils.hyperliquid_client import HyperliquidClient
-            _side_mon = "short" if "short" in _selected_json.lower() else "long"
-            bal = HyperliquidClient(side=_side_mon).get_balance()
+            bal       = get_hl_client().get_balance()
             bal_label = "USDC"
         except Exception:
-            bal = state.get("balance", 0)
+            bal       = state.get("balance", 0)
             bal_label = "$"
     else:
-        bal = state.get("balance", 0)
+        bal       = state.get("balance", 0)
         bal_label = "$"
     st.markdown(
         f"**PnL Session**  \n"
@@ -582,80 +528,71 @@ with pnl_col:
     )
     st.caption(f"{len(state.get('trades', []))} trade(s) fermé(s)")
 
+# ---------------------------------------------------------------------------
 # Historique des trades — depuis HL directement
+# ---------------------------------------------------------------------------
 st.subheader("📋 Historique des trades")
 if "mainnet" in _selected_json.lower():
     try:
-        from src.utils.hyperliquid_client import HyperliquidClient
-        _side_hist = "short" if "short" in _selected_json.lower() else "long"
-        _client_hist = HyperliquidClient(side=_side_hist)
-        _fills = _client_hist._post_info({"type": "userFills", "user": _client_hist.address})
+        client_historique = get_hl_client()
+        fills_hl          = client_historique._post_info({"type": "userFills", "user": client_historique.address})
 
-        # Reconstruire les trades depuis les fills
-        _trades_hl = []
-        _open_fills = {}  # coin → fill d'ouverture en attente
+        trades_reconstruits = []
+        entrees_en_attente  = {}  # coin → fill d'ouverture en attente
 
-        # Trier par time croissant
-        _fills_sorted = sorted(_fills, key=lambda x: x["time"])
+        for f in sorted(fills_hl, key=lambda x: x["time"]):
+            coin          = f["coin"]
+            direction_fill = f.get("dir", "")
+            prix_fill     = float(f["px"])
+            date_fill     = pd.to_datetime(f["time"], unit="ms")
+            frais_fill    = float(f.get("fee", 0))
 
-        for _f in _fills_sorted:
-            _coin = _f["coin"]
-            _dir  = _f.get("dir", "")
-            _px   = float(_f["px"])
-            _sz   = float(_f["sz"])
-            _ts   = pd.to_datetime(_f["time"], unit="ms")
-            _fee  = float(_f.get("fee", 0))
-
-            if "Open" in _dir:
-                _open_fills[_coin] = _f
-            elif "Close" in _dir and _coin in _open_fills:
-                _entry_fill = _open_fills.pop(_coin)
-                _entry_px   = float(_entry_fill["px"])
-                _is_long    = "Long" in _dir
-                _pnl_usd    = float(_f.get("closedPnl", 0)) - _fee - float(_entry_fill.get("fee", 0))
-                _pnl_pct    = (_px - _entry_px) / _entry_px * 100 if _is_long else (_entry_px - _px) / _entry_px * 100
-                _trades_hl.append({
-                    "Date":       _ts.strftime("%Y-%m-%d %H:%M"),
-                    "Actif":      _coin,
-                    "Direction":  "LONG" if _is_long else "SHORT",
-                    "Entrée":     _entry_px,
-                    "Sortie":     _px,
-                    "Taille":     _sz,
-                    "PnL $":      round(_pnl_usd, 2),
-                    "PnL %":      round(_pnl_pct, 2),
-                    "Raison":     _dir,
+            if "Open" in direction_fill:
+                entrees_en_attente[coin] = f
+            elif "Close" in direction_fill and coin in entrees_en_attente:
+                fill_entree = entrees_en_attente.pop(coin)
+                prix_entree = float(fill_entree["px"])
+                est_long    = "Long" in direction_fill
+                pnl_usd     = float(f.get("closedPnl", 0)) - frais_fill - float(fill_entree.get("fee", 0))
+                pnl_pct     = (prix_fill - prix_entree) / prix_entree * 100 if est_long else (prix_entree - prix_fill) / prix_entree * 100
+                trades_reconstruits.append({
+                    "Date":      date_fill.strftime("%Y-%m-%d %H:%M"),
+                    "Actif":     coin,
+                    "Direction": "LONG" if est_long else "SHORT",
+                    "Entrée":    prix_entree,
+                    "Sortie":    prix_fill,
+                    "Taille":    float(f["sz"]),
+                    "PnL $":     round(pnl_usd, 2),
+                    "PnL %":     round(pnl_pct, 2),
+                    "Raison":    direction_fill,
                 })
 
-        if _trades_hl:
-            _df_hl = pd.DataFrame(reversed(_trades_hl))
-            def _color_pnl(val):
+        if trades_reconstruits:
+            df_trades = pd.DataFrame(reversed(trades_reconstruits))
+            def colorier_pnl(val):
                 try:
                     return f"color: {'#22C55E' if float(val) >= 0 else '#EF4444'}; font-weight: bold"
                 except:
                     return ""
             st.dataframe(
-                _df_hl.style.map(_color_pnl, subset=["PnL $", "PnL %"]),
+                df_trades.style.map(colorier_pnl, subset=["PnL $", "PnL %"]),
                 width='stretch'
             )
-            # Résumé
-            _total_pnl = sum(t["PnL $"] for t in _trades_hl)
-            _nb_win    = sum(1 for t in _trades_hl if t["PnL $"] > 0)
-            _winrate   = _nb_win / len(_trades_hl) * 100 if _trades_hl else 0
-            _col1, _col2, _col3 = st.columns(3)
-            _col1.metric("Trades fermés", len(_trades_hl))
-            _col2.metric("Win rate", f"{_winrate:.0f}%")
-            _col3.metric("PnL total net", f"{_total_pnl:+.2f} USDC")
+            pnl_total  = sum(t["PnL $"] for t in trades_reconstruits)
+            nb_gagnants = sum(1 for t in trades_reconstruits if t["PnL $"] > 0)
+            winrate     = nb_gagnants / len(trades_reconstruits) * 100
+            col_nb, col_winrate, col_pnl = st.columns(3)
+            col_nb.metric("Trades fermés", len(trades_reconstruits))
+            col_winrate.metric("Win rate", f"{winrate:.0f}%")
+            col_pnl.metric("PnL total net", f"{pnl_total:+.2f} USDC")
         else:
             st.info("Aucun trade fermé sur ce compte HL")
     except Exception as e:
         st.error(f"❌ Erreur chargement historique HL : {e}")
-        # Fallback sur le JSON
         trades = state.get("trades", [])
         if trades:
-            df_t = pd.DataFrame(trades)
-            st.dataframe(df_t, width='stretch')
+            st.dataframe(pd.DataFrame(trades), width='stretch')
 else:
-    # Mode local/testnet → depuis le JSON
     trades = state.get("trades", [])
     if trades:
         df_t = pd.DataFrame(trades)
@@ -675,5 +612,3 @@ if log_lines:
     with st.expander("📋 Log du bot", expanded=True):
         for line in reversed(log_lines[-30:]):
             st.caption(line)
-
-# Pas d'auto-refresh — utilise le bouton 🔄 Rafraîchir
