@@ -114,7 +114,7 @@ with st.sidebar:
     if mode_duree == "Durées prédéfinies":
         durees_raw = st.text_input(
             "Durées (en nombre de bougies, séparées par des virgules)",
-            value="180,360,720",
+            value="180,360,720,1080",
             help="Ex : 180,360,720 — définit les colonnes des résultats",
         )
         try:
@@ -124,7 +124,9 @@ with st.sidebar:
     else:
         if "date_ranges" not in st.session_state:
             st.session_state.date_ranges = [
-                (date.today() - timedelta(days=360), date.today())
+                (date(2024, 10, 1), date(2025, 10, 1)),   # Bull
+                (date(2024, 4, 15), date(2024, 9, 30)),   # Range
+                (date(2025, 10, 1), date(2026, 6, 3)),    # Bear
             ]
 
         # Ajouter / supprimer des plages
