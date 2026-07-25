@@ -193,6 +193,7 @@ def run():
             ind_entry = cfg.get("ind_entry", {})
             ind_exit  = cfg.get("ind_exit",  {})
 
+            leverage       = int(cfg.get("leverage", 1))
             check_time_utc = cfg.get("check_time_utc")
             interval_min   = cfg.get("interval_min")
 
@@ -256,25 +257,39 @@ def run():
                 balance  = client.get_balance()
                 size_usd = balance * (size_pct / 100)
 
+                # Notional = marge × levier
+                notional = size_usd * leverage
+
                 if size_usd < 10:
                     log(f"{BOT_PREFIX} ⚠️ Solde insuffisant ({balance:.2f} USDC)", max_logs=5000)
                 else:
+                    # Configurer le levier sur HL avant d'ouvrir
+                    if leverage > 1:
+                        lev_res = client.set_leverage(symbol, leverage)
+                        if lev_res["ok"]:
+                            log(f"{BOT_PREFIX} ⚙️ Levier {leverage}x configuré sur {symbol}", max_logs=5000)
+                        else:
+                            log(f"{BOT_PREFIX} ⚠️ Échec config levier : {lev_res} — ouverture en x1", max_logs=5000)
+
                     # Long → buy / Short → short (ordre sans reduce_only)
-                    res = client.buy(symbol, size_usd) if not is_short else client.short(symbol, size_usd)
+                    # On envoie le notional comme taille en USDC
+                    res = client.buy(symbol, notional) if not is_short else client.short(symbol, notional)
                     if res and res["ok"]:
                         fill = res.get("fill_price") or exec_price
-                        qty  = round(size_usd / fill, 6)
+                        qty  = round(notional / fill, 6)
                         state["position"] = {
                             "symbol":      symbol,
                             "side":        "LONG" if not is_short else "SHORT",
                             "is_short":    is_short,
                             "entry_price": fill,
                             "qty":         qty,
-                            "size_usdt":   size_usd,
+                            "size_usdt":   notional,   # notional pour PnL correct
+                            "margin_usdt": size_usd,   # marge réelle engagée
+                            "leverage":    leverage,
                             "ts":          datetime.now().isoformat(),
                         }
                         log(f"{BOT_PREFIX} ✅ {'LONG' if not is_short else 'SHORT'} ouvert "
-                            f"@ {fill:.2f} | {size_usd:.2f} USDC", max_logs=5000)
+                            f"@ {fill:.2f} | {notional:.2f} USDC notional (marge: {size_usd:.2f} USDC, x{leverage})", max_logs=5000)
 
                         # ── TP/SL natifs HL — protection temps réel ────────
                         tp_price_native = fill * (1 + tp_pct / 100) if tp_pct and not is_short else (fill * (1 - tp_pct / 100) if tp_pct else None)
@@ -287,11 +302,24 @@ def run():
                                 tp_price=tp_price_native,
                                 sl_price=sl_price_native,
                             )
-                            if tpsl_res["ok"]:
+                            tp_ok = tpsl_res.get("tp_ok", False) if tp_price_native else True
+                            sl_ok = tpsl_res.get("sl_ok", False) if sl_price_native else True
+
+                            if tp_ok and sl_ok:
                                 log(f"{BOT_PREFIX} 🛡️ TP/SL natifs posés sur HL — "
                                     f"TP: {tp_price_native:.0f}$ | SL: {sl_price_native:.0f}$", max_logs=5000)
+                            elif not sl_ok:
+                                # SL échoué = pas de protection → fermeture d'urgence
+                                log(f"{BOT_PREFIX} 🚨 SL natif échoué — fermeture d'urgence de la position !", max_logs=5000)
+                                urgence_res = client.sell(symbol, qty) if not is_short else client.close_short(symbol, qty)
+                                if urgence_res and urgence_res["ok"]:
+                                    log(f"{BOT_PREFIX} ✅ Position fermée en urgence (pas de SL posé)", max_logs=5000)
+                                else:
+                                    log(f"{BOT_PREFIX} ❌ Échec fermeture urgence : {urgence_res} — INTERVENTION MANUELLE REQUISE", max_logs=5000)
+                                state["position"] = None
                             else:
-                                log(f"{BOT_PREFIX} ⚠️ Échec TP/SL natifs : {tpsl_res}", max_logs=5000)
+                                # TP échoué mais SL OK → on garde la position, juste un warning
+                                log(f"{BOT_PREFIX} ⚠️ TP natif échoué mais SL OK — position gardée sans TP automatique", max_logs=5000)
                     else:
                         log(f"{BOT_PREFIX} ❌ Ordre échoué : {res}", max_logs=5000)
 
@@ -335,8 +363,10 @@ def run():
                     else:
                         log(f"{BOT_PREFIX} ❌ Clôture échouée : {res}", max_logs=5000)
 
-            # ── Sauvegarder la date du check pour éviter double entrée ─────
-            state["last_entry_date"] = today_utc
+            # ── Sauvegarder la date du check uniquement si on a vraiment vérifié ─
+            # (pas en first_run pour ne pas bloquer le lendemain après un restart)
+            if not first_run:
+                state["last_entry_date"] = today_utc
 
             # ── 7. Log état final + save ───────────────────────────────────
             pos         = state.get("position")
