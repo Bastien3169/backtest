@@ -562,8 +562,10 @@ if "mainnet" in _selected_json.lower():
                 fill_entree = entrees_en_attente.pop(coin)
                 prix_entree = float(fill_entree["px"])
                 est_long    = "Long" in direction_fill
-                pnl_usd     = float(f.get("closedPnl", 0)) - frais_fill - float(fill_entree.get("fee", 0))
-                pnl_pct     = (prix_fill - prix_entree) / prix_entree * 100 if est_long else (prix_entree - prix_fill) / prix_entree * 100
+                frais_entree = float(fill_entree.get("fee", 0))
+                pnl_usd     = float(f.get("closedPnl", 0)) - frais_fill - frais_entree
+                notional_entree = float(fill_entree.get("ntl", 0)) or (prix_entree * float(fill_entree.get("sz", 0)))
+                pnl_pct     = (pnl_usd / notional_entree * 100) if notional_entree else 0
                 trades_reconstruits.append({
                     "Date":      date_fill.strftime("%Y-%m-%d %H:%M"),
                     "Actif":     coin,
