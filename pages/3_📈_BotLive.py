@@ -517,18 +517,22 @@ with pos_col:
         st.info("Aucune position ouverte")
 
 with pnl_col:
-    pnl   = state.get("pnl_session", 0.0)
-    color = "#22C55E" if pnl >= 0 else "#EF4444"
     if "mainnet" in _selected_json.lower():
         try:
             bal       = get_hl_client().get_balance()
             bal_label = "USDC"
+            # PnL session calculé depuis HL (source de vérité)
+            fills_pnl = get_hl_client()._post_info({"type": "userFills", "user": get_hl_client().address})
+            pnl = sum(float(f.get("closedPnl", 0)) - float(f.get("fee", 0)) for f in fills_pnl)
         except Exception:
             bal       = state.get("balance", 0)
             bal_label = "$"
+            pnl       = state.get("pnl_session", 0.0)
     else:
-        bal       = state.get("balance", 0)
+        bal   = state.get("balance", 0)
         bal_label = "$"
+        pnl   = state.get("pnl_session", 0.0)
+    color = "#22C55E" if pnl >= 0 else "#EF4444"
     st.markdown(
         f"**PnL Session**  \n"
         f"<span style='font-size:28px;color:{color};font-weight:bold'>{float(pnl):+.2f}</span>  \n"
@@ -547,30 +551,37 @@ if "mainnet" in _selected_json.lower():
         fills_hl          = client_historique._post_info({"type": "userFills", "user": client_historique.address})
 
         trades_reconstruits = []
-        entrees_en_attente  = {}  # coin → fill d'ouverture en attente
+        # entrees_en_attente : coin → liste de fills d'ouverture en attente
+        entrees_en_attente  = {}
 
         for f in sorted(fills_hl, key=lambda x: x["time"]):
-            coin          = f["coin"]
+            coin           = f["coin"]
             direction_fill = f.get("dir", "")
-            prix_fill     = float(f["px"])
-            date_fill     = pd.to_datetime(f["time"], unit="ms")
-            frais_fill    = float(f.get("fee", 0))
+            prix_fill      = float(f["px"])
+            date_fill      = pd.to_datetime(f["time"], unit="ms")
+            frais_fill     = float(f.get("fee", 0))
 
             if "Open" in direction_fill:
-                entrees_en_attente[coin] = f
+                # Accumuler les opens (plusieurs opens possibles avant un close)
+                if coin not in entrees_en_attente:
+                    entrees_en_attente[coin] = []
+                entrees_en_attente[coin].append(f)
+
             elif "Close" in direction_fill and coin in entrees_en_attente:
-                fill_entree = entrees_en_attente.pop(coin)
-                prix_entree = float(fill_entree["px"])
-                est_long    = "Long" in direction_fill
-                frais_entree = float(fill_entree.get("fee", 0))
-                pnl_usd     = float(f.get("closedPnl", 0)) - frais_fill - frais_entree
-                notional_entree = float(fill_entree.get("ntl", 0)) or (prix_entree * float(fill_entree.get("sz", 0)))
-                pnl_pct     = (pnl_usd / notional_entree * 100) if notional_entree else 0
+                opens = entrees_en_attente.pop(coin)
+                est_long = "Long" in direction_fill
+                # Notional total et frais totaux de tous les opens
+                ntl_total    = sum(float(o.get("ntl", 0)) or (float(o["px"]) * float(o["sz"])) for o in opens)
+                frais_opens  = sum(float(o.get("fee", 0)) for o in opens)
+                # Prix d'entrée moyen pondéré
+                prix_entree  = sum(float(o["px"]) * float(o["sz"]) for o in opens) / sum(float(o["sz"]) for o in opens)
+                pnl_usd      = float(f.get("closedPnl", 0)) - frais_fill - frais_opens
+                pnl_pct      = (pnl_usd / ntl_total * 100) if ntl_total else 0
                 trades_reconstruits.append({
                     "Date":      date_fill.strftime("%Y-%m-%d %H:%M"),
                     "Actif":     coin,
                     "Direction": "LONG" if est_long else "SHORT",
-                    "Entrée":    prix_entree,
+                    "Entrée":    round(prix_entree, 2),
                     "Sortie":    prix_fill,
                     "Taille":    float(f["sz"]),
                     "PnL $":     round(pnl_usd, 2),
@@ -589,13 +600,13 @@ if "mainnet" in _selected_json.lower():
                 df_trades.style.map(colorier_pnl, subset=["PnL $", "PnL %"]),
                 width='stretch'
             )
-            pnl_total  = sum(t["PnL $"] for t in trades_reconstruits)
+            pnl_total   = sum(t["PnL $"] for t in trades_reconstruits)
             nb_gagnants = sum(1 for t in trades_reconstruits if t["PnL $"] > 0)
             winrate     = nb_gagnants / len(trades_reconstruits) * 100
             col_nb, col_winrate, col_pnl = st.columns(3)
             col_nb.metric("Trades fermés", len(trades_reconstruits))
             col_winrate.metric("Win rate", f"{winrate:.0f}%")
-            col_pnl.metric("PnL total net", f"{pnl_total:+.2f} USDC")
+            col_pnl.metric("PnL total net (HL)", f"{pnl_total:+.2f} USDC")
         else:
             st.info("Aucun trade fermé sur ce compte HL")
     except Exception as e:
