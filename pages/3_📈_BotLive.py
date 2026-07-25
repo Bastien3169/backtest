@@ -551,10 +551,38 @@ if "mainnet" in _selected_json.lower():
         fills_hl          = client_historique._post_info({"type": "userFills", "user": client_historique.address})
 
         trades_reconstruits = []
-        # entrees_en_attente : coin → liste de fills d'ouverture en attente
-        entrees_en_attente  = {}
+        entrees_en_attente  = {}   # coin → liste de fills d'ouverture
+        closes_par_oid      = {}   # oid → liste de fills de fermeture (HL peut splitter)
 
-        for f in sorted(fills_hl, key=lambda x: x["time"]):
+        # 1. Regrouper les closes par oid (même ordre peut être splitté en N fills)
+        for f in fills_hl:
+            if "Close" in f.get("dir", ""):
+                oid = f["oid"]
+                if oid not in closes_par_oid:
+                    closes_par_oid[oid] = []
+                closes_par_oid[oid].append(f)
+
+        # 2. Construire les closes fusionnés (un seul fill agrégé par oid)
+        closes_fusionnes = []
+        for oid, close_fills in closes_par_oid.items():
+            f0 = close_fills[0]
+            sz_total       = sum(float(f["sz"]) for f in close_fills)
+            closed_pnl_tot = sum(float(f.get("closedPnl", 0)) for f in close_fills)
+            frais_tot      = sum(float(f.get("fee", 0)) for f in close_fills)
+            closes_fusionnes.append({
+                "coin":       f0["coin"],
+                "dir":        f0["dir"],
+                "px":         f0["px"],
+                "sz":         str(sz_total),
+                "time":       f0["time"],
+                "fee":        str(frais_tot),
+                "closedPnl":  str(closed_pnl_tot),
+                "oid":        oid,
+            })
+
+        # 3. Reconstruire les trades en appariant opens et closes fusionnés
+        tous_fills = [f for f in fills_hl if "Open" in f.get("dir", "")] + closes_fusionnes
+        for f in sorted(tous_fills, key=lambda x: x["time"]):
             coin           = f["coin"]
             direction_fill = f.get("dir", "")
             prix_fill      = float(f["px"])
@@ -562,18 +590,15 @@ if "mainnet" in _selected_json.lower():
             frais_fill     = float(f.get("fee", 0))
 
             if "Open" in direction_fill:
-                # Accumuler les opens (plusieurs opens possibles avant un close)
                 if coin not in entrees_en_attente:
                     entrees_en_attente[coin] = []
                 entrees_en_attente[coin].append(f)
 
             elif "Close" in direction_fill and coin in entrees_en_attente:
-                opens = entrees_en_attente.pop(coin)
-                est_long = "Long" in direction_fill
-                # Notional total et frais totaux de tous les opens
+                opens        = entrees_en_attente.pop(coin)
+                est_long     = "Long" in direction_fill
                 ntl_total    = sum(float(o.get("ntl", 0)) or (float(o["px"]) * float(o["sz"])) for o in opens)
                 frais_opens  = sum(float(o.get("fee", 0)) for o in opens)
-                # Prix d'entrée moyen pondéré
                 prix_entree  = sum(float(o["px"]) * float(o["sz"]) for o in opens) / sum(float(o["sz"]) for o in opens)
                 pnl_usd      = float(f.get("closedPnl", 0)) - frais_fill - frais_opens
                 pnl_pct      = (pnl_usd / ntl_total * 100) if ntl_total else 0
