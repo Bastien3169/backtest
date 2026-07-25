@@ -270,6 +270,21 @@ class HyperliquidClient:
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
+    def set_leverage(self, asset: str, leverage: int) -> dict:
+        """
+        Configure le levier pour un actif sur HL (Isolated margin).
+        À appeler avant d'ouvrir une position.
+        leverage : entier entre 1 et 50
+        """
+        try:
+            result = self._exchange.update_leverage(leverage, asset, is_cross=False)
+            ok = result.get("status") == "ok"
+            print(f"Levier {leverage}x sur {asset} : {'✅' if ok else '❌'} {result}")
+            return {"ok": ok, "data": result}
+        except Exception as e:
+            print(f"Erreur set_leverage : {e}")
+            return {"ok": False, "message": str(e)}
+
     def set_tp_sl(self, asset: str, size: float, is_short: bool,
                   tp_price: float = None, sl_price: float = None) -> dict:
         """
@@ -338,11 +353,21 @@ class HyperliquidClient:
                 sl_ok = sl_result.get("status") == "ok"
                 print(f"SL natif @ {sl_px} : {'✅' if sl_ok else '❌'} {sl_result}")
 
-            return {"ok": True, "results": results}
+            # Vérifier les statuses individuels TP et SL
+            tp_ok = False
+            sl_ok = False
+            if "tp" in results:
+                tp_statuses = results["tp"].get("response", {}).get("data", {}).get("statuses", [])
+                tp_ok = results["tp"].get("status") == "ok" and not any("error" in s for s in tp_statuses)
+            if "sl" in results:
+                sl_statuses = results["sl"].get("response", {}).get("data", {}).get("statuses", [])
+                sl_ok = results["sl"].get("status") == "ok" and not any("error" in s for s in sl_statuses)
+
+            return {"ok": True, "tp_ok": tp_ok, "sl_ok": sl_ok, "results": results}
 
         except Exception as e:
             print(f"Erreur set_tp_sl : {e}")
-            return {"ok": False, "message": str(e)}
+            return {"ok": False, "tp_ok": False, "sl_ok": False, "message": str(e)}
 
     def close_short(self, asset: str, size: float) -> dict:
         """

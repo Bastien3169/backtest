@@ -202,7 +202,10 @@ with cfg2:
             solde_hl = 0.0
         st.metric("Solde HL", f"{solde_hl:.2f} USDC")
         size_pct = st.number_input("% du solde par trade", 1, 100, 10, 1, key="size_pct_hl")
+        leverage = st.number_input("Levier (x)", 1, 20, 1, 1, key="leverage_hl")
+        notional = solde_hl * size_pct / 100 * leverage
         st.metric("USDC par trade", f"{solde_hl * size_pct / 100:.2f} USDC")
+        st.caption(f"→ Notional : {notional:.2f} USDC (x{leverage})")
         capital  = 0.0
     else:
         size_pct = st.number_input("% du solde par trade", 1, 100, 95, 1)
@@ -278,6 +281,7 @@ with c1:
             "interval_min":   interval_min,
             "ind_entry":      ind_entry,
             "ind_exit":       ind_exit,
+            "leverage":       leverage if is_mainnet else 1,
         }
         save_state(new_state)
         bot_cmd = {"local": "python bot_local.py", "testnet": "python bot_testnet.py", "mainnet": "python bot_mainnet.py"}[new_state["mode"]]
@@ -427,22 +431,27 @@ if is_mainnet and state.get("status") == "running" and not get_state().get("posi
             balance_entree  = client_entree.get_balance()
             config_entree   = get_state().get("strategy", {})
             size_pct_entree = config_entree.get("size_pct", 10)
+            leverage_entree = config_entree.get("leverage", 1)
             size_usd_entree = balance_entree * (size_pct_entree / 100)
+            notional_entree = size_usd_entree * leverage_entree
             symbol_entree   = config_entree.get("symbol", "BTCUSDT").replace("USDT", "")
             tp_pct_entree   = config_entree.get("tp_pct")
             sl_pct_entree   = config_entree.get("sl_pct")
             if size_usd_entree < 10:
                 st.error(f"⚠️ Solde insuffisant ({balance_entree:.2f} USDC)")
             else:
-                res = client_entree.short(symbol_entree, size_usd_entree) if is_short_force else client_entree.buy(symbol_entree, size_usd_entree)
+                if leverage_entree > 1:
+                    get_hl_client().set_leverage(symbol_entree, leverage_entree)
+                res = client_entree.short(symbol_entree, notional_entree) if is_short_force else client_entree.buy(symbol_entree, notional_entree)
                 if res and res["ok"]:
                     fill = res.get("fill_price", 0)
-                    qty  = round(size_usd_entree / fill, 6)
+                    qty  = round(notional_entree / fill, 6)
                     s    = get_state()
                     s["position"] = {
                         "symbol": symbol_entree, "side": "SHORT" if is_short_force else "LONG",
                         "is_short": is_short_force, "entry_price": fill,
-                        "qty": qty, "size_usdt": size_usd_entree,
+                        "qty": qty, "size_usdt": notional_entree,
+                        "margin_usdt": size_usd_entree, "leverage": leverage_entree,
                         "ts": datetime.now().isoformat(),
                     }
                     s["last_entry_date"] = datetime.now().strftime("%Y-%m-%d")
