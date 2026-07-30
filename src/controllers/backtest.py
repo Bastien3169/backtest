@@ -329,6 +329,23 @@ def run_backtest_single(
                                    "gain_pct": round(gain_pct, 2)})
                     position    = 0
                     entry_price = None
+                    # Après SL/TP intraday : vérifier si signal d'entrée actif sur close[T]
+                    # → permet une entrée à l'open de T+1 (cohérent avec le bot prod)
+                    if exit_reason.startswith("SL") or exit_reason.startswith("TP"):
+                        if sig_entry_full.reindex(df_slice.index).iloc[i] and cash > 0:
+                            next_open = df_slice.iloc[i + 1]["open"] if i + 1 < len(df_slice) else None
+                            if next_open:
+                                qty  = cash / (next_open * (1 + frais_pct / 100))
+                                cost = qty * next_open * (1 + frais_pct / 100)
+                                if cost <= cash * 1.0000001:
+                                    cost = min(cost, cash)
+                                    cash       -= cost
+                                    position    = qty
+                                    entry_price = next_open
+                                    next_ts = df_slice.index[i + 1]
+                                    trades.append({"timestamp": next_ts, "type": "buy",
+                                                   "price": next_open,
+                                                   "capital": cash + position * next_open})
 
         else:
             # ── MODE SHORT ─────────────────────────────────────────────────
@@ -376,6 +393,20 @@ def run_backtest_single(
                                    "gain_pct": round(gain_pct, 2)})
                     position    = 0
                     entry_price = None
+                    # Après SL/TP intraday : vérifier si signal d'entrée actif sur close[T]
+                    # → permet une entrée à l'open de T+1 (cohérent avec le bot prod)
+                    if exit_reason.startswith("SL") or exit_reason.startswith("TP"):
+                        if sig_entry_full.reindex(df_slice.index).iloc[i] and cash > 0:
+                            next_open = df_slice.iloc[i + 1]["open"] if i + 1 < len(df_slice) else None
+                            if next_open:
+                                qty        = cash / (next_open * (1 + frais_pct / 100))
+                                entry_cost = qty * next_open * frais_pct / 100
+                                cash      -= entry_cost
+                                position    = qty
+                                entry_price = next_open
+                                next_ts = df_slice.index[i + 1]
+                                trades.append({"timestamp": next_ts, "type": "short_entry",
+                                               "price": next_open, "capital": cash})
 
     # ── Clôture finale ────────────────────────────────────────────────────
     final_close = df_slice.iloc[-1]["close"]
