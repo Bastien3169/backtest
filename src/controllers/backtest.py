@@ -210,17 +210,18 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
 # Simulation
 # ---------------------------------------------------------------------------
 
-def run_backtest_single(
-    df: pd.DataFrame,
-    strategy: dict,
-    capital: float,
-    frais_pct: float,
-    duree: int,
-    date_range=None,
-) -> dict:
-    if len(df) < 2:
-        return _empty_result()
+def precompute(df: pd.DataFrame, strategy: dict) -> dict:
+    """
+    Calcule UNE SEULE FOIS les indicateurs et les signaux d'entrée/sortie.
 
+    Les indicateurs (MM, RSI, MACD, Bollinger) et les signaux ne dépendent
+    QUE des indicateurs configurés — pas du TP ni du SL. Sur une grille
+    d'optimisation TP x SL, ils sont donc strictement identiques pour toutes
+    les combinaisons : les calculer une fois et réutiliser le résultat évite
+    N x le même travail.
+
+    Retourne un dict à passer en `precomputed=` à run_backtest_single().
+    """
     ind_achat = strategy.get("ind_achat", {})
     ind_vente = strategy.get("ind_vente", {})
 
@@ -242,7 +243,40 @@ def run_backtest_single(
         )),
     }
 
-    df_full = apply_all_indicators(df, ind_merged)
+    df_full  = apply_all_indicators(df, ind_merged)
+    is_short = strategy.get("is_short", False)
+
+    return {
+        "df_full":        df_full,
+        "sig_entry_full": _build_signal(df_full, ind_achat, side="sell" if is_short else "buy"),
+        "sig_exit_full":  _build_signal(df_full, ind_vente, side="buy"  if is_short else "sell"),
+    }
+
+
+def run_backtest_single(
+    df: pd.DataFrame,
+    strategy: dict,
+    capital: float,
+    frais_pct: float,
+    duree: int,
+    date_range=None,
+    precomputed: dict | None = None,
+) -> dict:
+    """
+    precomputed : résultat de precompute() — évite de recalculer indicateurs
+                  et signaux quand seuls TP/SL changent (grille d'optimisation).
+                  None = tout est calculé normalement (comportement historique).
+    """
+    if len(df) < 2:
+        return _empty_result()
+
+    ind_achat = strategy.get("ind_achat", {})
+    ind_vente = strategy.get("ind_vente", {})
+
+    if precomputed is None:
+        precomputed = precompute(df, strategy)
+
+    df_full = precomputed["df_full"]
 
     if date_range is not None:
         date_debut, date_fin = date_range
@@ -258,12 +292,9 @@ def run_backtest_single(
     sl_pct   = strategy.get("sl_pct")
     is_short = strategy.get("is_short", False)
 
-    side_entry = "sell" if is_short else "buy"
-    side_exit  = "buy"  if is_short else "sell"
-
-    # Signaux calculés sur df_full (contexte complet) puis alignés sur df_slice
-    sig_entry_full = _build_signal(df_full, ind_achat, side=side_entry)
-    sig_exit_full  = _build_signal(df_full, ind_vente, side=side_exit)
+    # Signaux déjà calculés dans precompute() — alignés sur df_slice
+    sig_entry_full = precomputed["sig_entry_full"]
+    sig_exit_full  = precomputed["sig_exit_full"]
 
     sig_entry = sig_entry_full.reindex(df_slice.index).shift(1).fillna(False)
     sig_exit  = sig_exit_full.reindex(df_slice.index).shift(1).fillna(False)
