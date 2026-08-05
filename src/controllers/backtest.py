@@ -5,7 +5,8 @@ Moteur de backtest : signaux achat + vente + simulation des trades.
 Conventions de timing :
 - Signal calculé sur close[T]
 - Exécution à open[T+1] (via shift(1) global sur les signaux)
-- TP/SL vérifiés sur high/low[T+1] intra-bougie
+- TP/SL vérifiés sur high/low intra-bougie, Y COMPRIS sur la bougie d'entrée
+  (en réel les ordres natifs HL sont actifs dès l'ouverture de la position)
 - Tous les shifts internes aux indicateurs ont été retirés de _build_signal
   car le shift(1) global suffit. Seuls les croisements (MACD, MM cross, Bollinger,
   BTC cross) gardent leur shift interne pour détecter l'événement de croisement —
@@ -101,22 +102,38 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
     if cross_a and cross_b:
         col_a, col_b = f"mm_{cross_a}", f"mm_{cross_b}"
         if col_a in df.columns and col_b in df.columns:
-            prev_a = df[col_a].shift(1)
-            prev_b = df[col_b].shift(1)
-            if side == "buy":
-                conditions.append((prev_a <= prev_b) & (df[col_a] > df[col_b]))
+            # "franchissement" = evenement ponctuel (le croisement lui-meme)
+            # "etat"           = condition persistante (A reste au-dessus/dessous de B)
+            # Defaut franchissement : comportement historique preserve.
+            if cfg.get("mm_cross_mode", "franchissement") == "etat":
+                if side == "buy":
+                    conditions.append(df[col_a] > df[col_b])
+                else:
+                    conditions.append(df[col_a] < df[col_b])
             else:
-                conditions.append((prev_a >= prev_b) & (df[col_a] < df[col_b]))
+                prev_a = df[col_a].shift(1)
+                prev_b = df[col_b].shift(1)
+                if side == "buy":
+                    conditions.append((prev_a <= prev_b) & (df[col_a] > df[col_b]))
+                else:
+                    conditions.append((prev_a >= prev_b) & (df[col_a] < df[col_b]))
 
     # ── MACD — croisement sur bougie T (pas de shift interne)
     # macd[T] croise macd_signal[T] par rapport à T-1 → exécution open[T+1] via shift global
     if cfg.get("use_macd") and "macd" in df.columns and "macd_signal" in df.columns:
-        prev_macd = df["macd"].shift(1)
-        prev_sig  = df["macd_signal"].shift(1)
-        if side == "buy":
-            conditions.append((prev_macd <= prev_sig) & (df["macd"] > df["macd_signal"]))
+        # "etat" = MACD reste au-dessus/en-dessous de sa ligne de signal
+        if cfg.get("macd_mode", "franchissement") == "etat":
+            if side == "buy":
+                conditions.append(df["macd"] > df["macd_signal"])
+            else:
+                conditions.append(df["macd"] < df["macd_signal"])
         else:
-            conditions.append((prev_macd >= prev_sig) & (df["macd"] < df["macd_signal"]))
+            prev_macd = df["macd"].shift(1)
+            prev_sig  = df["macd_signal"].shift(1)
+            if side == "buy":
+                conditions.append((prev_macd <= prev_sig) & (df["macd"] > df["macd_signal"]))
+            else:
+                conditions.append((prev_macd >= prev_sig) & (df["macd"] < df["macd_signal"]))
 
     # ── Bollinger — état / franchissement / suivi ────────────────────────
     bollinger_cond    = cfg.get("bollinger_cond")
@@ -188,12 +205,19 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
         col_btc   = f"btc_mm_{btc_period}"
         col_asset = f"mm_{btc_period}"
         if col_btc in df.columns and col_asset in df.columns:
-            prev_asset = df[col_asset].shift(1)
-            prev_btc   = df[col_btc].shift(1)
-            if side == "buy":
-                conditions.append((prev_asset <= prev_btc) & (df[col_asset] > df[col_btc]))
+            # "etat" = la MM de l'actif reste au-dessus/en-dessous de celle du BTC
+            if cfg.get("btc_cross_mode", "franchissement") == "etat":
+                if side == "buy":
+                    conditions.append(df[col_asset] > df[col_btc])
+                else:
+                    conditions.append(df[col_asset] < df[col_btc])
             else:
-                conditions.append((prev_asset >= prev_btc) & (df[col_asset] < df[col_btc]))
+                prev_asset = df[col_asset].shift(1)
+                prev_btc   = df[col_btc].shift(1)
+                if side == "buy":
+                    conditions.append((prev_asset <= prev_btc) & (df[col_asset] > df[col_btc]))
+                else:
+                    conditions.append((prev_asset >= prev_btc) & (df[col_asset] < df[col_btc]))
 
     # ── Combinaison ET ────────────────────────────────────────────────────
     if not conditions:
@@ -328,8 +352,14 @@ def run_backtest_single(
                     trades.append({"timestamp": ts, "type": "buy", "price": exec_price,
                                    "capital": cash + position * close})
 
-            # TP/SL/signal de sortie
-            elif position > 0 and entry_price is not None:
+            # TP/SL/signal de sortie.
+            # "if" et non "elif" : la bougie d'ENTREE doit elle aussi etre testee
+            # contre le TP/SL. En reel le bot pose ses ordres natifs sur HL dans la
+            # seconde qui suit l'entree — ils sont donc actifs des cette bougie.
+            # Avec un "elif", chaque position beneficiait d'une bougie sans
+            # protection, ce qui gonflait artificiellement les resultats (l'effet
+            # est d'autant plus fort que le SL est serre).
+            if position > 0 and entry_price is not None:
                 tp_price = entry_price * (1 + tp_pct / 100) if tp_pct else None
                 sl_price = entry_price * (1 - sl_pct / 100) if sl_pct else None
 
@@ -360,23 +390,6 @@ def run_backtest_single(
                                    "gain_pct": round(gain_pct, 2)})
                     position    = 0
                     entry_price = None
-                    # Après SL/TP intraday : vérifier si signal d'entrée actif sur close[T]
-                    # → permet une entrée à l'open de T+1 (cohérent avec le bot prod)
-                    if exit_reason.startswith("SL") or exit_reason.startswith("TP"):
-                        if sig_entry_full.reindex(df_slice.index).iloc[i] and cash > 0:
-                            next_open = df_slice.iloc[i + 1]["open"] if i + 1 < len(df_slice) else None
-                            if next_open:
-                                qty  = cash / (next_open * (1 + frais_pct / 100))
-                                cost = qty * next_open * (1 + frais_pct / 100)
-                                if cost <= cash * 1.0000001:
-                                    cost = min(cost, cash)
-                                    cash       -= cost
-                                    position    = qty
-                                    entry_price = next_open
-                                    next_ts = df_slice.index[i + 1]
-                                    trades.append({"timestamp": next_ts, "type": "buy",
-                                                   "price": next_open,
-                                                   "capital": cash + position * next_open})
 
         else:
             # ── MODE SHORT ─────────────────────────────────────────────────
@@ -393,7 +406,8 @@ def run_backtest_single(
                 trades.append({"timestamp": ts, "type": "short_entry", "price": exec_price,
                                "capital": cash})
 
-            elif position > 0 and entry_price is not None:
+            # "if" et non "elif" : voir le commentaire du mode long ci-dessus
+            if position > 0 and entry_price is not None:
                 # TP/SL inversés pour short : TP sur low, SL sur high
                 tp_price = entry_price * (1 - tp_pct / 100) if tp_pct else None
                 sl_price = entry_price * (1 + sl_pct / 100) if sl_pct else None
@@ -424,20 +438,6 @@ def run_backtest_single(
                                    "gain_pct": round(gain_pct, 2)})
                     position    = 0
                     entry_price = None
-                    # Après SL/TP intraday : vérifier si signal d'entrée actif sur close[T]
-                    # → permet une entrée à l'open de T+1 (cohérent avec le bot prod)
-                    if exit_reason.startswith("SL") or exit_reason.startswith("TP"):
-                        if sig_entry_full.reindex(df_slice.index).iloc[i] and cash > 0:
-                            next_open = df_slice.iloc[i + 1]["open"] if i + 1 < len(df_slice) else None
-                            if next_open:
-                                qty        = cash / (next_open * (1 + frais_pct / 100))
-                                entry_cost = qty * next_open * frais_pct / 100
-                                cash      -= entry_cost
-                                position    = qty
-                                entry_price = next_open
-                                next_ts = df_slice.index[i + 1]
-                                trades.append({"timestamp": next_ts, "type": "short_entry",
-                                               "price": next_open, "capital": cash})
 
     # ── Clôture finale ────────────────────────────────────────────────────
     final_close = df_slice.iloc[-1]["close"]

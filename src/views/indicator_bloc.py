@@ -52,6 +52,10 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
                     else " < ".join([f"MM{p}" for p in mm_align_periods])
                 st.caption(f"Prix {order}")
 
+    mm_cross_mode  = "franchissement"
+    btc_cross_mode = "franchissement"
+    macd_mode      = "franchissement"
+
     with col3:
         st.markdown("**🔀 Croisement MM**")
         use_cross = st.checkbox(
@@ -62,6 +66,18 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
                 "Courte (A)", MM_LABELS, index=2, key=f"{key_prefix}_cross_a")
             mm_cross_b = st.selectbox(
                 "Longue (B)", MM_LABELS, index=4, key=f"{key_prefix}_cross_b")
+            mm_cross_mode = "etat" if st.radio(
+                "Mode", ["↗ Franchissement", "📍 État"],
+                key=f"{key_prefix}_cross_mode", horizontal=True,
+                help="Franchissement : signal au moment du croisement seulement. "
+                     "État : signal tant que A reste du bon côté de B.",
+            ) == "📍 État" else "franchissement"
+            _sens = ">" if side == "buy" else "<"
+            st.caption(
+                f"MM{mm_cross_a} {_sens} MM{mm_cross_b} en continu"
+                if mm_cross_mode == "etat"
+                else f"Au croisement MM{mm_cross_a} / MM{mm_cross_b}"
+            )
 
     st.write("")
 
@@ -74,8 +90,15 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         if use_btc:
             btc_cross_period = st.selectbox(
                 "Période MM", MM_LABELS, index=3, key=f"{key_prefix}_btc_p")
+            btc_cross_mode = "etat" if st.radio(
+                "Mode", ["↗ Franchissement", "📍 État"],
+                key=f"{key_prefix}_btc_mode", horizontal=True,
+                help="Franchissement : signal au croisement seulement. "
+                     "État : signal tant que la condition tient.",
+            ) == "📍 État" else "franchissement"
             arrow = ">" if side == "buy" else "<"
-            st.caption(f"MM{btc_cross_period} actif {arrow} MM{btc_cross_period} BTC")
+            _suffixe = "en continu" if btc_cross_mode == "etat" else "(au croisement)"
+            st.caption(f"MM{btc_cross_period} actif {arrow} MM{btc_cross_period} BTC {_suffixe}")
 
     with col5:
         st.markdown("**〰️ MACD**")
@@ -83,7 +106,17 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
             "Haussier" if side == "buy" else "Baissier",
             key=f"{key_prefix}_macd")
         if use_macd:
-            st.caption("Croisement MACD / Signal")
+            macd_mode = "etat" if st.radio(
+                "Mode", ["↗ Franchissement", "📍 État"],
+                key=f"{key_prefix}_macd_mode", horizontal=True,
+                help="Franchissement : signal au croisement MACD/Signal seulement. "
+                     "État : signal tant que le MACD reste du bon côté.",
+            ) == "📍 État" else "franchissement"
+            _sens = "au-dessus" if side == "buy" else "en dessous"
+            st.caption(
+                f"MACD {_sens} de sa ligne Signal en continu"
+                if macd_mode == "etat" else "Au croisement MACD / Signal"
+            )
 
     with col6:
         st.markdown("**📊 Bollinger**")
@@ -104,10 +137,10 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
 
             # Condition d'entrée — 4 choix indépendants
             BOLL_CONDITIONS = {
-                "gt_haute":  "close > bande haute ↑",
-                "lt_haute":  "close < bande haute ↓",
-                "gt_basse":  "close > bande basse ↑",
-                "lt_basse":  "close < bande basse ↓",
+                "gt_haute":  "close > bande haute",
+                "lt_haute":  "close < bande haute",
+                "gt_basse":  "close > bande basse",
+                "lt_basse":  "close < bande basse",
             }
             bollinger_cond = st.selectbox(
                 "Condition",
@@ -204,8 +237,11 @@ def render_indicator_bloc(side: str, key_prefix: str) -> dict:
         "mm_align_periods": mm_align_periods,
         "mm_cross_a":       mm_cross_a,
         "mm_cross_b":       mm_cross_b,
+        "mm_cross_mode":    mm_cross_mode,
         "btc_cross_period": btc_cross_period,
+        "btc_cross_mode":   btc_cross_mode,
         "use_macd":         use_macd,
+        "macd_mode":        macd_mode,
         "use_bollinger":    use_bollinger,
         "bollinger_band":    bollinger_band,
         "bollinger_cond":    bollinger_cond if use_bollinger else None,
