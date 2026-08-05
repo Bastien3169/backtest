@@ -182,6 +182,33 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Erreur : {e}")
 
+    # ── Export CSV des bougies chargées ──────────────────────────────────
+    if st.session_state.df_ohlcv is not None and not st.session_state.df_ohlcv.empty:
+        _df_export = st.session_state.df_ohlcv.copy()
+        _df_export.index.name = "date"
+
+        # On garde l'OHLC en priorité : high et low sont indispensables pour
+        # rejouer les TP/SL intra-bougie hors de l'app.
+        _cols = [c for c in ["open", "high", "low", "close", "volume"]
+                 if c in _df_export.columns]
+        _csv = _df_export[_cols].to_csv().encode("utf-8")
+
+        _debut = str(_df_export.index[0])[:10]
+        _fin   = str(_df_export.index[-1])[:10]
+
+        st.download_button(
+            "⬇️ Télécharger les bougies (CSV)",
+            data=_csv,
+            file_name=f"bougies_{coin_id}_{timeframe}_{_debut}_{_fin}.csv",
+            mime="text/csv",
+            width='stretch',
+            help="Export OHLCV brut — réutilisable pour une analyse externe",
+        )
+        st.caption(
+            f"{len(_df_export)} bougies · {_debut} → {_fin}  \n"
+            f"Colonnes : {', '.join(_cols)}"
+        )
+
 # ---------------------------------------------------------------------------
 # GESTION DES STRATÉGIES
 # ---------------------------------------------------------------------------
