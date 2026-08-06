@@ -1,5 +1,5 @@
 """
-bot_mainnet.py — VERSION CORRIGÉE (voir commentaires "# FIX n" pour le détail)
+bot_mainnet.py
 Trading RÉEL sur Hyperliquid MAINNET — VRAI ARGENT.
 
 ⚠️  ATTENTION : Ce bot utilise de vrais fonds USDC sur Hyperliquid.
@@ -14,51 +14,6 @@ Prérequis :
    HL_WALLET_ADDRESS=0x...
 
 Lancement : python bot_mainnet.py [--config bot_state_mainnet_long.json]
-
----------------------------------------------------------------------------
-CHANGEMENTS PAR RAPPORT À L'ORIGINAL (bot_mainnet.py) :
-
-FIX 1 — Double exposition non protégée après échec de fermeture d'urgence.
-  Avant : si le SL natif échouait ET la fermeture d'urgence échouait aussi,
-  le code faisait quand même `state["position"] = None`. Le bot croyait donc
-  n'avoir aucune position et pouvait en ouvrir une nouvelle au cycle suivant,
-  alors que l'ancienne restait réellement ouverte sur Hyperliquid, sans
-  aucune protection SL/TP.
-  Maintenant : la position n'est effacée du state QUE si la fermeture
-  d'urgence a réellement réussi. Sinon elle reste marquée
-  `protected: False` — ce qui bloque toute nouvelle entrée (car l'entrée
-  exige `pos is None`) et déclenche une nouvelle tentative de pose du SL/TP
-  natif à chaque cycle tant que ce n'est pas résolu.
-
-FIX 2 — Le bouton "stop" / changement de stratégie depuis Streamlit pouvait
-  être écrasé par le bot en fin de cycle.
-  Avant : le bot lisait le state en début de boucle, travaillait sur cette
-  copie en mémoire pendant tout le cycle (jusqu'à plusieurs minutes selon le
-  timeframe), puis réécrivait TOUT le state à la fin — y compris les champs
-  "status" et "strategy" figés depuis le début du cycle. Si l'utilisateur
-  cliquait "stop" ou changeait la config pendant ce temps, sa modification
-  était perdue.
-  Maintenant : juste avant la sauvegarde finale, on relit le state à jour
-  et on ne réécrit que les champs que le bot possède réellement (position,
-  trades, pnl_session, last_check, last_price, last_entry_date). Les champs
-  pilotés par l'utilisateur (status, strategy) restent ceux les plus
-  récents, peu importe quand ils ont été modifiés pendant le cycle.
-
-FIX 3 — Aucun garde-fou de perte maximale.
-  Avant : seul un SL par trade existait. Rien n'empêchait une série de
-  pertes de continuer indéfiniment.
-  Maintenant : un kill switch optionnel bloque les NOUVELLES entrées (les
-  sorties/fermetures restent toujours actives) si la perte cumulée de la
-  session dépasse `max_loss_pct` % du capital initial (`balance_init`).
-  Réglable via la clé "max_loss_pct" dans le JSON de config (défaut : 20%).
-
-FIX 4 — Pas de plafond sur le levier.
-  Avant : le levier du JSON était envoyé tel quel à Hyperliquid, sans
-  validation — une erreur de saisie (ex: 250 au lieu de 2.5) partait
-  directement en production.
-  Maintenant : le levier est plafonné à MAX_LEVERAGE (25 par défaut) avec
-  un log d'avertissement si la valeur configurée dépasse ce plafond.
----------------------------------------------------------------------------
 """
 
 # ---------------------------------------------------------------------------
@@ -107,11 +62,6 @@ print(f"{BOT_PREFIX} Fichier JSON : {_bs.STATE_FILE}")
 get_state  = _bs.get_state
 save_state = _bs.save_state
 log        = _bs.log
-
-# ---------------------------------------------------------------------------
-# FIX 4 — Plafond de sécurité sur le levier
-# ---------------------------------------------------------------------------
-MAX_LEVERAGE = 25
 
 # ---------------------------------------------------------------------------
 # Timing — synchronisation sur les heures rondes UTC
@@ -244,20 +194,8 @@ def run():
             ind_exit  = cfg.get("ind_exit",  {})
 
             leverage       = int(cfg.get("leverage", 1))
-            # FIX 4 — plafond de sécurité sur le levier
-            if leverage > MAX_LEVERAGE:
-                log(f"{BOT_PREFIX} ⚠️ Levier configuré ({leverage}x) > plafond de sécurité "
-                    f"({MAX_LEVERAGE}x) — bridé à {MAX_LEVERAGE}x", max_logs=5000)
-                leverage = MAX_LEVERAGE
             check_time_utc = cfg.get("check_time_utc")
             interval_min   = cfg.get("interval_min")
-
-            # FIX 3 — kill switch de perte maximale (bloque les nouvelles entrées seulement)
-            balance_init   = float(state.get("balance_init", 1000.0)) or 1000.0
-            max_loss_pct   = float(cfg.get("max_loss_pct", 20))
-            max_loss_usd   = balance_init * (max_loss_pct / 100)
-            pnl_session_now = float(state.get("pnl_session", 0))
-            kill_switch_active = pnl_session_now <= -max_loss_usd
 
             # ── 1. Log immédiat au début du cycle ──────────────────────────
             sleep_sec_next = next_sleep(timeframe, check_time_utc, interval_min)
@@ -267,33 +205,6 @@ def run():
             log(f"{BOT_PREFIX} ✔️ En ligne | {symbol} | {timeframe} | "
                 f"Position: {pos_str_now} | "
                 f"Prochain check à {next_check.strftime('%H:%M:%S')} UTC", max_logs=5000)
-
-            if kill_switch_active:
-                log(f"{BOT_PREFIX} 🛑 Kill switch actif — perte session {pnl_session_now:+.2f}$ "
-                    f"≤ seuil -{max_loss_usd:.2f}$ ({max_loss_pct:.0f}% du capital) — "
-                    f"nouvelles entrées bloquées, positions existantes toujours gérées", max_logs=5000)
-
-            # FIX 1 — si une position ouverte précédemment n'a pas pu être protégée
-            # (SL natif + fermeture d'urgence tous deux échoués au cycle précédent),
-            # on retente de poser le SL/TP natif à chaque cycle tant que ce n'est pas résolu.
-            pos_unprotected = state.get("position") and not state["position"].get("protected", True)
-            if pos_unprotected:
-                _p = state["position"]
-                log(f"{BOT_PREFIX} 🚨 Position {_p['side']} @ {_p['entry_price']:.2f}$ toujours SANS SL/TP natif "
-                    f"— nouvelle tentative de pose", max_logs=5000)
-                _tp_native = _p["entry_price"] * (1 + tp_pct / 100) if tp_pct and not _p["is_short"] else (_p["entry_price"] * (1 - tp_pct / 100) if tp_pct else None)
-                _sl_native = _p["entry_price"] * (1 - sl_pct / 100) if sl_pct and not _p["is_short"] else (_p["entry_price"] * (1 + sl_pct / 100) if sl_pct else None)
-                if _tp_native or _sl_native:
-                    _retry = client.set_tp_sl(
-                        asset=_p["symbol"], size=_p["qty"], is_short=_p["is_short"],
-                        tp_price=_tp_native, sl_price=_sl_native,
-                    )
-                    if _retry.get("sl_ok", False) or not _sl_native:
-                        state["position"]["protected"] = True
-                        log(f"{BOT_PREFIX} 🛡️ SL/TP natif reposé avec succès — position de nouveau protégée", max_logs=5000)
-                    else:
-                        log(f"{BOT_PREFIX} ❌ Nouvelle tentative de pose du SL échouée — "
-                            f"INTERVENTION MANUELLE TOUJOURS REQUISE", max_logs=5000)
 
             # ── 2. Bougies HL ──────────────────────────────────────────────
             df = client.get_klines(symbol, timeframe, limit=300)
@@ -342,8 +253,7 @@ def run():
 
             # first_run = True → on ne prend pas de position au premier cycle
             # already_checked = True → signal déjà vu aujourd'hui, on attend demain
-            # kill_switch_active = True → perte max de session atteinte, plus de nouvelles entrées (FIX 3)
-            if pos is None and entry_signal and not first_run and not already_checked and not kill_switch_active:
+            if pos is None and entry_signal and not first_run and not already_checked:
                 balance  = client.get_balance()
                 size_usd = balance * (size_pct / 100)
 
@@ -377,7 +287,6 @@ def run():
                             "margin_usdt": size_usd,   # marge réelle engagée
                             "leverage":    leverage,
                             "ts":          datetime.now().isoformat(),
-                            "protected":   False,  # FIX 1 — passe à True seulement si le SL/TP natif est confirmé posé
                         }
                         log(f"{BOT_PREFIX} ✅ {'LONG' if not is_short else 'SHORT'} ouvert "
                             f"@ {fill:.2f} | {notional:.2f} USDC notional (marge: {size_usd:.2f} USDC, x{leverage})", max_logs=5000)
@@ -397,7 +306,6 @@ def run():
                             sl_ok = tpsl_res.get("sl_ok", False) if sl_price_native else True
 
                             if tp_ok and sl_ok:
-                                state["position"]["protected"] = True
                                 log(f"{BOT_PREFIX} 🛡️ TP/SL natifs posés sur HL — "
                                     f"TP: {tp_price_native:.0f}$ | SL: {sl_price_native:.0f}$", max_logs=5000)
                             elif not sl_ok:
@@ -406,21 +314,11 @@ def run():
                                 urgence_res = client.sell(symbol, qty) if not is_short else client.close_short(symbol, qty)
                                 if urgence_res and urgence_res["ok"]:
                                     log(f"{BOT_PREFIX} ✅ Position fermée en urgence (pas de SL posé)", max_logs=5000)
-                                    # FIX 1 — la position est réellement fermée, on peut l'effacer du state
-                                    state["position"] = None
                                 else:
-                                    # FIX 1 — fermeture d'urgence ÉCHOUÉE : la position est TOUJOURS
-                                    # ouverte sur Hyperliquid. On NE l'efface PAS du state, sinon le bot
-                                    # croirait à tort n'avoir aucune position et pourrait en ouvrir une
-                                    # seconde par-dessus, sans protection, au cycle suivant.
-                                    log(f"{BOT_PREFIX} ❌ Échec fermeture urgence : {urgence_res} — "
-                                        f"INTERVENTION MANUELLE REQUISE — position gardée en state comme "
-                                        f"'non protégée', nouvelle tentative de pose du SL au prochain cycle",
-                                        max_logs=5000)
-                                    state["position"]["protected"] = False
+                                    log(f"{BOT_PREFIX} ❌ Échec fermeture urgence : {urgence_res} — INTERVENTION MANUELLE REQUISE", max_logs=5000)
+                                state["position"] = None
                             else:
                                 # TP échoué mais SL OK → on garde la position, juste un warning
-                                state["position"]["protected"] = True
                                 log(f"{BOT_PREFIX} ⚠️ TP natif échoué mais SL OK — position gardée sans TP automatique", max_logs=5000)
                     else:
                         log(f"{BOT_PREFIX} ❌ Ordre échoué : {res}", max_logs=5000)
@@ -480,18 +378,11 @@ def run():
                 f"Balance: {bal:.2f} USDC | PnL session: {pnl_session:+.2f}$ | {nb_trades} trades | "
                 f"Position: {pos_str}", max_logs=5000)
 
-            # FIX 2 — on relit le state à jour et on ne réécrit QUE les champs
-            # que le bot possède réellement, pour ne pas écraser un "stop" ou
-            # un changement de stratégie fait depuis Streamlit pendant le cycle.
-            fresh                     = get_state()
-            fresh["log"]              = fresh["log"]          # déjà à jour (via log())
-            fresh["position"]         = state["position"]
-            fresh["trades"]           = state["trades"]
-            fresh["pnl_session"]      = state["pnl_session"]
-            fresh["last_check"]       = datetime.now().isoformat()
-            fresh["last_price"]       = exec_price
-            fresh["last_entry_date"]  = state.get("last_entry_date", fresh.get("last_entry_date"))
-            save_state(fresh)
+            fresh                = get_state()
+            state["log"]         = fresh["log"]
+            state["last_check"]  = datetime.now().isoformat()
+            state["last_price"]  = exec_price
+            save_state(state)
 
             # ── 8. Sleep ───────────────────────────────────────────────────
             sleep_sec  = next_sleep(timeframe, check_time_utc, interval_min)
