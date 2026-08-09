@@ -452,39 +452,48 @@ with onglets[0]:
     agg = agg.merge(positifs, on=["TP (%)", "SL (%)"])
     agg["Ratio R/R"] = (agg["TP (%)"] / agg["SL (%)"]).round(2)
 
-    vue = st.radio(
+    vues_robustesse = [
+        (
+            "Pire période", "pire",
+            f"{metrique} — pire des {nb_p} périodes",
+            "Le résultat le plus faible obtenu sur l'ensemble des périodes. "
+            "Vue la plus sévère, et la plus honnête.",
+            echelle, z_min, z_max,
+        ),
+        (
+            "Moyenne", "moyenne",
+            f"{metrique} — moyenne des {nb_p} périodes",
+            "La moyenne lisse les écarts — utile mais masque les périodes catastrophiques.",
+            echelle, z_min, z_max,
+        ),
+        (
+            "Nb périodes gagnantes", "periodes_positives",
+            f"Nombre de périodes en rendement positif (sur {nb_p})",
+            f"Combien de périodes finissent en gain. Une combinaison à {nb_p}/{nb_p} "
+            "est robuste tous régimes confondus.",
+            "RdYlGn", 0, nb_p,
+        ),
+    ]
+
+    choix_vue = st.radio(
         "Vue",
-        ["Pire période", "Moyenne", "Nb périodes gagnantes"],
+        ["Voir tout", "Pire période", "Moyenne", "Nb périodes gagnantes"],
         horizontal=True, key="opti_vue_robustesse",
     )
 
-    if vue == "Pire période":
-        col_z = "pire"
-        titre_z = f"{metrique} — pire des {nb_p} périodes"
-        st.caption(
-            "Le résultat le plus faible obtenu sur l'ensemble des périodes. "
-            "Vue la plus sévère, et la plus honnête."
-        )
-        scale, zmin_v, zmax_v = echelle, z_min, z_max
-    elif vue == "Moyenne":
-        col_z = "moyenne"
-        titre_z = f"{metrique} — moyenne des {nb_p} périodes"
-        st.caption("La moyenne lisse les écarts — utile mais masque les périodes catastrophiques.")
-        scale, zmin_v, zmax_v = echelle, z_min, z_max
-    else:
-        col_z = "periodes_positives"
-        titre_z = f"Nombre de périodes en rendement positif (sur {nb_p})"
-        st.caption(
-            f"Combien de périodes finissent en gain. Une combinaison à {nb_p}/{nb_p} "
-            "est robuste tous régimes confondus."
-        )
-        scale, zmin_v, zmax_v = "RdYlGn", 0, nb_p
-
-    pivot_rob = agg.pivot(index="SL (%)", columns="TP (%)", values=col_z)
-    st.plotly_chart(
-        _heatmap(pivot_rob, titre_z, col_z, scale, zmin_v, zmax_v),
-        width="stretch",
+    vues_a_afficher = (
+        vues_robustesse if choix_vue == "Voir tout"
+        else [v for v in vues_robustesse if v[0] == choix_vue]
     )
+
+    for vue, col_z, titre_z, caption_z, scale, zmin_v, zmax_v in vues_a_afficher:
+        st.markdown(f"**{vue}**")
+        st.caption(caption_z)
+        pivot_rob = agg.pivot(index="SL (%)", columns="TP (%)", values=col_z)
+        st.plotly_chart(
+            _heatmap(pivot_rob, titre_z, col_z, scale, zmin_v, zmax_v),
+            width="stretch",
+        )
 
     # ── Classement robustesse : trié sur la pire période ──────────────────
     st.subheader("🏆 Classement par robustesse")
