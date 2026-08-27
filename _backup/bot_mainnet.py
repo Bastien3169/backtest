@@ -100,7 +100,7 @@ BOT_PREFIX = "[" + _basename.replace("bot_state_", "").replace(".json", "").uppe
 # Détecter le side (long/short) depuis le nom du fichier config
 # "bot_state_mainnet_short.json" → side = "short"
 # "bot_state_mainnet_long.json"  → side = "long"
-_hl_side = "short" if "short" in _basename.lower() else ("free" if "free" in _basename.lower() else "long")
+_hl_side = "short" if "short" in _basename.lower() else "long"
 
 print(f"{BOT_PREFIX} Fichier JSON : {_bs.STATE_FILE}")
 
