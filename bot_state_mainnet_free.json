@@ -1,0 +1,13 @@
+{
+  "status": "stopped",
+  "mode": "local",
+  "position": null,
+  "balance": 1000.0,
+  "balance_init": 1000.0,
+  "trades": [],
+  "log": [],
+  "strategy": {},
+  "last_check": null,
+  "last_price": null,
+  "pnl_session": 0.0
+}

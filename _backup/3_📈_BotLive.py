@@ -72,7 +72,7 @@ save_state = _bs_module.save_state
 reset      = _bs_module.reset
 
 # Détection du side depuis le nom du JSON — utilisé partout dans la page
-bot_side = "short" if "short" in _selected_json.lower() else ("free" if "free" in _selected_json.lower() else "long")
+bot_side = "short" if "short" in _selected_json.lower() else "long"
 
 def get_hl_client():
     """Retourne un HyperliquidClient pour le bon compte (long ou short)."""

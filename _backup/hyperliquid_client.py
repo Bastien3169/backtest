@@ -91,9 +91,6 @@ class HyperliquidClient:
         if self.side == "short":
             self.pk      = os.getenv("SHORT_HL_PRIVATE_KEY") or os.getenv("HL_PRIVATE_KEY", "")
             self.address = os.getenv("SHORT_METAMASK_ADDRESS") or os.getenv("HL_WALLET_ADDRESS", "")
-        elif self.side == "free":
-            self.pk      = os.getenv("FREE_HL_PRIVATE_KEY") or os.getenv("HL_PRIVATE_KEY", "")
-            self.address = os.getenv("FREE_METAMASK_ADDRESS") or os.getenv("HL_WALLET_ADDRESS", "")
         else:
             self.pk      = os.getenv("LONG_HL_PRIVATE_KEY") or os.getenv("HL_PRIVATE_KEY", "")
             self.address = os.getenv("LONG_METAMASK_ADDRESS") or os.getenv("HL_WALLET_ADDRESS", "")
