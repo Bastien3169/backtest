@@ -394,3 +394,66 @@ class HyperliquidClient:
                     "error": statuses[0].get("error") if has_error else None}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
+
+    def get_open_positions(self) -> list:
+        """
+        Source de verite : positions REELLEMENT ouvertes sur ce wallet, lues en
+        direct depuis Hyperliquid (clearinghouseState). Independant de tout JSON.
+
+        Retourne une liste de dicts, ou [] si aucune position.
+        Leve une exception si l'API est injoignable -- l'appelant doit decider
+        quoi faire (surtout ne PAS conclure "aucune position").
+        """
+        state = self._post_info({"type": "clearinghouseState", "user": self.address})
+        raw = state.get("assetPositions", []) if isinstance(state, dict) else []
+
+        positions = []
+        for item in raw:
+            pos = item.get("position", {}) or {}
+            try:
+                szi = float(pos.get("szi", 0) or 0)
+            except (TypeError, ValueError):
+                szi = 0.0
+            if szi == 0:
+                continue
+
+            is_short = szi < 0
+            qty      = abs(szi)
+
+            def _f(key, default=0.0):
+                try:
+                    v = pos.get(key)
+                    return float(v) if v not in (None, "") else default
+                except (TypeError, ValueError):
+                    return default
+
+            entry_price = _f("entryPx")
+            lev_raw     = pos.get("leverage")
+            lev_val     = lev_raw.get("value") if isinstance(lev_raw, dict) else lev_raw
+            liq_raw     = pos.get("liquidationPx")
+
+            positions.append({
+                "symbol":         pos.get("coin", "?"),
+                "side":           "SHORT" if is_short else "LONG",
+                "is_short":       is_short,
+                "qty":            qty,
+                "entry_price":    entry_price,
+                # notional coherent avec qty -- utilise par les calculs de PnL
+                "size_usdt":      round(qty * entry_price, 2),
+                "unrealized_pnl": _f("unrealizedPnl"),
+                "margin_used":    _f("marginUsed"),
+                "leverage":       lev_val,
+                "liquidation_px": float(liq_raw) if liq_raw not in (None, "") else None,
+            })
+        return positions
+
+    def get_position(self, asset: str) -> dict | None:
+        """
+        Position reelle sur un symbole precis, ou None si aucune.
+        Leve une exception si l'API est injoignable (voir get_open_positions).
+        """
+        asset = (asset or "").replace("-USD", "").replace("USDT", "")
+        for p in self.get_open_positions():
+            if p["symbol"] == asset:
+                return p
+        return None

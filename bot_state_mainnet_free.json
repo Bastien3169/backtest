@@ -1,7 +1,18 @@
 {
   "status": "stopped",
   "mode": "local",
-  "position": null,
+  "position": {
+    "symbol": "BTC",
+    "side": "LONG",
+    "is_short": false,
+    "entry_price": 79145.0,
+    "qty": 0.0014,
+    "size_usdt": 110.8,
+    "margin_usdt": 52.851396,
+    "leverage": 2,
+    "ts": "2026-08-28T22:41:43.548125",
+    "protected": false
+  },
   "balance": 1000.0,
   "balance_init": 1000.0,
   "trades": [],

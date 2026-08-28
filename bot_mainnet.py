@@ -195,42 +195,95 @@ def run():
                     continue
                 log(f"{BOT_PREFIX} {res['message']}", max_logs=5000)
 
-            # ── Vérification synchronisation position JSON/HL ─────────────
-            pos_json = state.get("position")
-            if pos_json:
-                try:
-                    hl_state   = client._post_info({"type": "clearinghouseState", "user": client.address})
-                    hl_positions = hl_state.get("assetPositions", [])
-                    _sym_check = pos_json.get("symbol", "BTC")
-                    pos_on_hl  = any(
-                        float(p.get("position", {}).get("szi", 0)) != 0
-                        for p in hl_positions
-                        if p.get("position", {}).get("coin") == _sym_check
-                    )
-                    if not pos_on_hl:
-                        # Position fermée par HL (SL/TP natif) sans que le bot le sache
-                        log(f"{BOT_PREFIX} 🔄 Position fermée par HL (SL/TP natif) — mise à jour JSON", max_logs=5000)
-                        # Estimer le PnL depuis le dernier prix connu
-                        _last_price = state.get("last_price") or pos_json["entry_price"]
-                        _pnl_pct = (_last_price - pos_json["entry_price"]) / pos_json["entry_price"] * 100 if not pos_json.get("is_short") else (pos_json["entry_price"] - _last_price) / pos_json["entry_price"] * 100
-                        _pnl_usd = round(pos_json["qty"] * _last_price - pos_json["size_usdt"], 2) if not pos_json.get("is_short") else round(pos_json["size_usdt"] - pos_json["qty"] * _last_price, 2)
-                        state["trades"].append({
-                            "ts": datetime.now().isoformat(),
-                            "symbol": pos_json["symbol"],
-                            "side": pos_json["side"],
-                            "entry_price": pos_json["entry_price"],
-                            "exit_price": _last_price,
-                            "qty": pos_json["qty"],
-                            "pnl_pct": round(_pnl_pct, 2),
-                            "pnl_usd": _pnl_usd,
-                            "raison": "SL/TP natif HL",
-                        })
-                        state["pnl_session"] = sum(t.get("pnl_usd", 0) for t in state["trades"])
-                        state["position"] = None
-                        save_state(state)
-                        state = get_state()
-                except Exception as e:
-                    log(f"{BOT_PREFIX} ⚠️ Erreur vérif position HL : {e}", max_logs=5000)
+            # ── MIROIR HL — Hyperliquid est la SOURCE DE VÉRITÉ ────────────
+            # À chaque cycle on relit la position RÉELLE sur HL et on aligne le
+            # JSON dessus. Couvre : fermeture par TP/SL natif, position ouverte
+            # à la main sur HL (adoption), renfort ou clôture partielle hors bot.
+            _cfg_now    = state.get("strategy", {}) or {}
+            _symbol_now = _cfg_now.get("symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")
+
+            _hl_ok  = True
+            _pos_hl = None
+            try:
+                _pos_hl = client.get_position(_symbol_now)
+            except Exception as e:
+                # API injoignable : surtout NE PAS conclure "aucune position".
+                _hl_ok = False
+                log(f"{BOT_PREFIX} ⚠️ Lecture positions HL impossible : {e} — "
+                    f"state local conservé tel quel ce cycle", max_logs=5000)
+
+            if _hl_ok:
+                _pos_json = state.get("position")
+
+                # Cas 1 — HL dit FERMÉ alors que le JSON croyait la position ouverte
+                if _pos_hl is None and _pos_json:
+                    log(f"{BOT_PREFIX} 🔄 Position {_pos_json.get('symbol')} fermée côté HL "
+                        f"(SL/TP natif ou clôture manuelle) — mise à jour du JSON", max_logs=5000)
+                    _last_price = state.get("last_price") or _pos_json.get("entry_price") or 0
+                    _entry      = _pos_json.get("entry_price") or 0
+                    _qty        = _pos_json.get("qty", 0)
+                    _notional   = _pos_json.get("size_usdt", _qty * _entry)
+                    if _entry:
+                        _pnl_pct = ((_last_price - _entry) / _entry * 100
+                                    if not _pos_json.get("is_short")
+                                    else (_entry - _last_price) / _entry * 100)
+                    else:
+                        _pnl_pct = 0.0
+                    _pnl_usd = (round(_qty * _last_price - _notional, 2)
+                                if not _pos_json.get("is_short")
+                                else round(_notional - _qty * _last_price, 2))
+                    state["trades"].append({
+                        "ts": datetime.now().isoformat(),
+                        "symbol": _pos_json.get("symbol", _symbol_now),
+                        "side": _pos_json.get("side"),
+                        "entry_price": _entry,
+                        "exit_price": _last_price,
+                        "qty": _qty,
+                        "pnl_pct": round(_pnl_pct, 2),
+                        "pnl_usd": _pnl_usd,
+                        "raison": "Fermée hors bot (SL/TP natif ou manuel)",
+                    })
+                    state["pnl_session"] = sum(t.get("pnl_usd", 0) for t in state["trades"])
+                    state["position"] = None
+                    save_state(state)
+                    state = get_state()
+
+                # Cas 2 — HL dit OUVERT : le JSON s'aligne sur les chiffres de HL
+                elif _pos_hl is not None:
+                    _ancien  = state.get("position") or {}
+                    _nouveau = {
+                        "symbol":      _pos_hl["symbol"],
+                        "side":        _pos_hl["side"],
+                        "is_short":    _pos_hl["is_short"],
+                        "entry_price": _pos_hl["entry_price"],
+                        "qty":         _pos_hl["qty"],
+                        "size_usdt":   _pos_hl["size_usdt"],
+                        "margin_usdt": _pos_hl.get("margin_used") or _ancien.get("margin_usdt", 0),
+                        "leverage":    _pos_hl.get("leverage") or _ancien.get("leverage", 1),
+                        "ts":          _ancien.get("ts") or datetime.now().isoformat(),
+                        # Une position adoptée (jamais vue par le bot) est marquée
+                        # non protégée : la logique FIX 1 lui posera un SL/TP natif.
+                        "protected":   _ancien.get("protected", False) if _ancien else False,
+                        "adoptee_hl":  (not _ancien) or _ancien.get("adoptee_hl", False),
+                    }
+
+                    if not _ancien:
+                        log(f"{BOT_PREFIX} 📥 Position {_nouveau['side']} {_nouveau['symbol']} "
+                            f"présente sur HL mais non suivie par le bot — ADOPTÉE "
+                            f"({_nouveau['qty']} @ {_nouveau['entry_price']:.4f})", max_logs=5000)
+                    elif (abs(_ancien.get("qty", 0) - _nouveau["qty"]) > 1e-9
+                          or abs((_ancien.get("entry_price") or 0) - _nouveau["entry_price"]) > 1e-9):
+                        log(f"{BOT_PREFIX} 🔁 Position {_nouveau['symbol']} modifiée hors bot — "
+                            f"resynchro HL : {_ancien.get('qty')} @ {_ancien.get('entry_price')} "
+                            f"→ {_nouveau['qty']} @ {_nouveau['entry_price']:.4f}", max_logs=5000)
+                        if _ancien.get("protected"):
+                            log(f"{BOT_PREFIX} ⚠️ La taille a changé : les TP/SL natifs déjà posés "
+                                f"ne couvrent que l'ANCIENNE quantité ({_ancien.get('qty')}). "
+                                f"Vérifier/compléter la protection sur HL.", max_logs=5000)
+
+                    state["position"] = _nouveau
+                    save_state(state)
+                    state = get_state()
 
             # ── Config depuis le JSON ──────────────────────────────────────
             cfg       = state.get("strategy", {})
