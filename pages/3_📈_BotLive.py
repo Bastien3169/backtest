@@ -166,6 +166,7 @@ is_short  = direction == "🔴 Short"
 
 cfg1, cfg2, cfg3 = st.columns(3)
 
+# ── Ligne 1 : Actif | Taille de position | Rythme de check ──────────────────
 with cfg1:
     _all_assets   = get_all_assets()
     _asset_labels = [f"{c['symbol']} — {c['name']}" for c in _all_assets]
@@ -183,6 +184,24 @@ with cfg1:
         else:
             symbol = asset_id.replace("-USD", "USDT").replace("-USDT", "USDT")
 
+with cfg2:
+    if is_local:
+        capital = st.number_input("Capital fictif ($)", 100.0, 100000.0, 1000.0, 100.0)
+    elif is_mainnet:
+        size_pct = st.number_input("% du solde par trade", 1, 100, 10, 1, key="size_pct_hl")
+        capital  = 0.0
+    else:
+        size_pct = st.number_input("% du solde par trade", 1, 100, 95, 1)
+        capital  = 0.0
+
+with cfg3:
+    timing_mode = st.selectbox(
+        "Rythme de check", ["Intervalle (min)", "Heure fixe UTC"],
+        key="bot_timing_mode_v2",
+    )
+
+# ── Ligne 2 : Timeframe | Levier | Intervalle ou heure ──────────────────────
+with cfg1:
     timeframe = st.selectbox(
         "Timeframe",
         ["1m", "5m", "15m", "1h", "4h", "1d", "1w"] if not is_local
@@ -192,32 +211,16 @@ with cfg1:
 
 with cfg2:
     if is_local:
-        capital  = st.number_input("Capital fictif ($)", 100.0, 100000.0, 1000.0, 100.0)
         size_pct = st.number_input("% du capital par trade", 1, 100, 100, 1)
-        st.caption(f"→ {capital * size_pct / 100:.2f} $ par trade")
+        leverage = 1
     elif is_mainnet:
-        try:
-            solde_hl = get_hl_client().get_balance()
-        except Exception:
-            solde_hl = 0.0
-        st.metric("Solde HL", f"{solde_hl:.2f} USDC")
-        size_pct = st.number_input("% du solde par trade", 1, 100, 10, 1, key="size_pct_hl")
         leverage = st.number_input("Levier (x)", 1, 20, 1, 1, key="leverage_hl")
-        notional = solde_hl * size_pct / 100 * leverage
-        st.metric("USDC par trade", f"{solde_hl * size_pct / 100:.2f} USDC")
-        st.caption(f"→ Notional : {notional:.2f} USDC (x{leverage})")
-        capital  = 0.0
     else:
-        size_pct = st.number_input("% du solde par trade", 1, 100, 95, 1)
-        capital  = 0.0
-        st.caption("Solde réel chargé depuis Binance testnet")
+        leverage = 1
+        st.number_input("Levier (x)", 1, 1, 1, 1, disabled=True,
+                        help="Levier non géré sur ce mode", key="leverage_dummy")
 
 with cfg3:
-    st.markdown("**⏱️ Timing**")
-    timing_mode = st.radio(
-        "Mode", ["Intervalle (min)", "Heure fixe UTC"],
-        horizontal=True, key="bot_timing_mode",
-    )
     check_time_utc = None
     interval_min   = None
     if timing_mode == "Heure fixe UTC":
@@ -225,12 +228,33 @@ with cfg3:
             "Heure UTC (HH:MM)", value="00:01",
             help="France = UTC+1 hiver / UTC+2 été",
         )
-        st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été")
     else:
         interval_min = st.number_input(
             "Intervalle (minutes)", 1, 1440, 15, 1,
             help="Synchronisé sur les heures rondes UTC",
         )
+
+# ── Ligne 3 : récapitulatifs (sous les champs, n'affecte plus l'alignement) ──
+with cfg2:
+    if is_local:
+        st.caption(f"→ {capital * size_pct / 100:.2f} $ par trade")
+    elif is_mainnet:
+        try:
+            solde_hl = get_hl_client().get_balance()
+        except Exception:
+            solde_hl = 0.0
+        notional = solde_hl * size_pct / 100 * leverage
+        st.caption(
+            f"Solde HL : **{solde_hl:.2f} USDC** — "
+            f"{solde_hl * size_pct / 100:.2f} USDC par trade"
+        )
+        st.caption(f"→ Notional : {notional:.2f} USDC (x{leverage})")
+    else:
+        st.caption("Solde réel chargé depuis Binance testnet")
+
+with cfg3:
+    if timing_mode == "Heure fixe UTC":
+        st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été")
 
 st.divider()
 
@@ -304,14 +328,28 @@ with c3:
 # Bouton Arrêter + Fermer
 pos_ouverte = get_state().get("position")
 if is_mainnet and pos_ouverte and state.get("status") == "running":
-    st.warning(f"⚠️ Position ouverte : {pos_ouverte.get('side')} {pos_ouverte.get('symbol')} @ {pos_ouverte.get('entry_price'):.2f}$")
-    st.caption("Arrête le bot ET ferme la position sur HL")
+    st.caption(
+        "Arrête le bot ET ferme sa position sur HL. "
+        "La quantité fermée est relue en direct depuis Hyperliquid "
+        "(voir le panneau 📡 pour les chiffres réels)."
+    )
     if st.button("🔴 Arrêter + Fermer position", type="primary"):
         try:
             client_stop  = get_hl_client()
             symbol_stop  = pos_ouverte.get("symbol", "BTC")
-            qty_stop     = pos_ouverte.get("qty", 0)
-            is_short_pos = pos_ouverte.get("is_short", False)
+            # SÉCURITÉ : relire la position REELLE sur HL. Un qty local périmé
+            # (renfort ou clôture partielle hors app) laisserait un reliquat
+            # ouvert et NON protégé sur Hyperliquid.
+            _vrai_stop   = client_stop.get_position(symbol_stop)
+            if _vrai_stop is None:
+                st.warning("Aucune position " + symbol_stop + " sur HL — le bot est simplement arrêté.")
+                _s_stop = get_state()
+                _s_stop["status"]   = "stopped"
+                _s_stop["position"] = None
+                save_state(_s_stop)
+                st.rerun()
+            qty_stop     = round(_vrai_stop["qty"], 5)
+            is_short_pos = _vrai_stop["is_short"]
             res = client_stop.close_short(symbol_stop, qty_stop) if is_short_pos else client_stop.sell(symbol_stop, qty_stop)
             if res and res["ok"]:
                 fill    = res.get("fill_price") or pos_ouverte["entry_price"]
@@ -354,69 +392,16 @@ with c4:
                     position_existe_sur_hl = True
 
             if position_existe_sur_hl:
-                st.error("⚠️ Position ouverte sur HL ! Ferme-la d'abord avec '🔴 Forcer clôture'")
+                st.error(
+                    "⚠️ Position encore ouverte sur HL ! Ferme-la d'abord "
+                    "depuis le panneau 📡 Positions ouvertes sur Hyperliquid."
+                )
             else:
                 reset()
                 st.rerun()
         else:
             reset()
             st.rerun()
-
-# Bouton Forcer clôture
-pos = get_state().get("position")
-if pos:
-    st.warning(f"⚠️ Position ouverte : {pos.get('side')} {pos.get('symbol')} @ {pos.get('entry_price'):.2f}$")
-    col_close, _ = st.columns([1, 3])
-    with col_close:
-        st.caption("Ferme la position sur HL — le bot continue de chercher un nouveau signal")
-        if st.button("🔴 Forcer clôture", type="primary"):
-            if is_local:
-                s          = get_state()
-                last_price = s.get("last_price") or pos["entry_price"]
-                pnl_pct    = (last_price - pos["entry_price"]) / pos["entry_price"] * 100
-                pnl_usd    = round(pos["qty"] * last_price - pos["size_usdt"], 2)
-                s["balance"]    += pos["qty"] * last_price
-                s["pnl_session"] = round(s["balance"] - s.get("balance_init", 1000.0), 2)
-                s["trades"].append({
-                    "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
-                    "side": pos["side"], "entry_price": pos["entry_price"],
-                    "exit_price": last_price, "qty": pos["qty"],
-                    "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
-                    "raison": "Clôture forcée",
-                })
-                s["position"] = None
-                save_state(s)
-                st.success(f"Position fermée @ {last_price:.2f}$ | PnL: {pnl_usd:+.2f}$")
-                st.rerun()
-            elif is_mainnet:
-                try:
-                    client_cloture  = get_hl_client()
-                    symbol_cloture  = pos.get("symbol", "BTC")
-                    qty_cloture     = pos.get("qty", 0)
-                    is_short_pos    = pos.get("is_short", False)
-                    res = client_cloture.close_short(symbol_cloture, qty_cloture) if is_short_pos else client_cloture.sell(symbol_cloture, qty_cloture)
-                    if res and res["ok"]:
-                        fill    = res.get("fill_price") or pos["entry_price"]
-                        pnl_pct = (fill - pos["entry_price"]) / pos["entry_price"] * 100 if not is_short_pos else (pos["entry_price"] - fill) / pos["entry_price"] * 100
-                        pnl_usd = round(pos["qty"] * fill - pos.get("size_usdt", 0), 2) if not is_short_pos else round(pos.get("size_usdt", 0) - pos["qty"] * fill, 2)
-                        s = get_state()
-                        s["trades"].append({
-                            "ts": datetime.now().isoformat(), "symbol": pos["symbol"],
-                            "side": pos["side"], "entry_price": pos["entry_price"],
-                            "exit_price": fill, "qty": pos["qty"],
-                            "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
-                            "raison": "Clôture forcée",
-                        })
-                        s["position"] = None
-                        save_state(s)
-                        st.success(f"✅ Position fermée sur HL @ {fill:.2f}$ | PnL: {pnl_usd:+.2f}$")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Échec clôture HL : {res}")
-                except Exception as e:
-                    st.error(f"❌ Erreur : {e}")
-            else:
-                st.info("Pour le testnet : ferme manuellement sur Binance puis clique Reset.")
 
 # Bouton Forcer entrée
 if is_mainnet and state.get("status") == "running" and not get_state().get("position"):
@@ -476,6 +461,240 @@ st.divider()
 # ---------------------------------------------------------------------------
 # 4️⃣ Monitoring temps réel
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 📡 Positions ouvertes sur Hyperliquid — SOURCE DE VÉRITÉ
+# Lecture directe de HL à chaque affichage, indépendante du JSON local.
+# Gère plusieurs positions simultanées : fermeture totale, fermeture partielle
+# et renfort, symbole par symbole.
+# ---------------------------------------------------------------------------
+if is_mainnet:
+    st.subheader("📡 Positions ouvertes sur Hyperliquid")
+    st.caption("Lu en direct depuis HL — inclut les positions ouvertes à la main, hors bot.")
+
+    def _resync_json_depuis_hl(symbole: str):
+        """Aligne state['position'] du bot sur la réalité HL pour ce symbole.
+        Ne touche pas au JSON si celui-ci suit un AUTRE symbole."""
+        try:
+            p_hl = get_hl_client().get_position(symbole)
+        except Exception:
+            return
+        s_json = get_state()
+        ancien = s_json.get("position") or {}
+        if ancien and ancien.get("symbol") != symbole:
+            return
+        if p_hl is None:
+            s_json["position"] = None
+        else:
+            s_json["position"] = {
+                "symbol":      p_hl["symbol"],
+                "side":        p_hl["side"],
+                "is_short":    p_hl["is_short"],
+                "entry_price": p_hl["entry_price"],
+                "qty":         p_hl["qty"],
+                "size_usdt":   p_hl["size_usdt"],
+                "margin_usdt": p_hl.get("margin_used") or ancien.get("margin_usdt", 0),
+                "leverage":    p_hl.get("leverage") or ancien.get("leverage", 1),
+                "ts":          ancien.get("ts") or datetime.now().isoformat(),
+                "protected":   ancien.get("protected", False),
+            }
+        save_state(s_json)
+
+    try:
+        _positions_live = get_hl_client().get_open_positions()
+        _lecture_ok     = True
+    except Exception as _e_live:
+        _positions_live = []
+        _lecture_ok     = False
+        st.error("Impossible de lire les positions sur Hyperliquid : " + str(_e_live))
+
+    if _lecture_ok and not _positions_live:
+        st.info("Aucune position ouverte sur ce wallet d'après Hyperliquid.")
+
+    _symbole_suivi = (get_state().get("position") or {}).get("symbol")
+
+    for _p in _positions_live:
+        _sym   = _p["symbol"]
+        _suivi = (_sym == _symbole_suivi)
+        _badge = "🔗 suivie par le bot" if _suivi else "⚠️ hors bot"
+        _coul  = "#22C55E" if _p["unrealized_pnl"] >= 0 else "#EF4444"
+
+        with st.container(border=True):
+            _c1, _c2, _c3, _c4 = st.columns([1.4, 1.4, 1.4, 1.4])
+            _c1.markdown("**" + _sym + "** — " + _p["side"])
+            _c1.caption(_badge)
+            _c2.markdown("Quantité : `" + str(round(_p["qty"], 6)) + "`")
+            _c2.caption("Notional ≈ " + str(_p["size_usdt"]) + " $")
+            _c3.markdown("Entrée moy. : `" + format(_p["entry_price"], ".4f") + "`")
+            if _p["liquidation_px"]:
+                _c3.caption("Liquidation : " + format(_p["liquidation_px"], ".4f"))
+            _c4.markdown(
+                "PnL latent : <span style='color:" + _coul + ";font-weight:bold'>"
+                + format(_p["unrealized_pnl"], "+.2f") + " $</span>",
+                unsafe_allow_html=True,
+            )
+
+            _t_close, _t_partiel, _t_renfort = st.tabs(
+                ["🔴 Tout fermer", "✂️ Fermer une partie", "➕ Renforcer"]
+            )
+
+            # ── Fermeture totale ────────────────────────────────────────────
+            with _t_close:
+                if st.button("🔴 Fermer toute la position " + _sym, key="full_close_" + _sym):
+                    try:
+                        _cli = get_hl_client()
+                        _vrai = _cli.get_position(_sym)
+                        if _vrai is None:
+                            st.warning("Position déjà fermée sur HL.")
+                            _resync_json_depuis_hl(_sym)
+                            st.rerun()
+                        else:
+                            _qte = round(_vrai["qty"], 5)
+                            _res = (_cli.close_short(_sym, _qte) if _vrai["is_short"]
+                                    else _cli.sell(_sym, _qte))
+                            if _res and _res.get("ok"):
+                                st.success("Position " + _sym + " fermée.")
+                                _resync_json_depuis_hl(_sym)
+                                st.rerun()
+                            else:
+                                st.error("Échec fermeture : " + str(_res))
+                    except Exception as _e:
+                        st.error("Erreur : " + str(_e))
+
+            # ── Fermeture partielle ─────────────────────────────────────────
+            with _t_partiel:
+                _mode_p = st.radio(
+                    "Fermer en", ["% de la position", "Montant USDC"],
+                    horizontal=True, key="mode_part_" + _sym,
+                )
+                if _mode_p == "% de la position":
+                    _val_p = st.slider("Part à fermer (%)", 1, 99, 50, key="pct_part_" + _sym)
+                else:
+                    _val_p = st.number_input(
+                        "Montant à fermer (USDC de notional)",
+                        min_value=1.0, value=float(max(10.0, _p["size_usdt"] / 2)),
+                        step=10.0, key="usd_part_" + _sym,
+                    )
+
+                if st.button("✂️ Fermer cette partie de " + _sym, key="btn_part_" + _sym):
+                    try:
+                        _cli  = get_hl_client()
+                        _vrai = _cli.get_position(_sym)
+                        if _vrai is None:
+                            st.warning("Position déjà fermée sur HL.")
+                            _resync_json_depuis_hl(_sym)
+                            st.rerun()
+                        else:
+                            if _mode_p == "% de la position":
+                                _qte = _vrai["qty"] * (float(_val_p) / 100.0)
+                            else:
+                                _prix = _cli.get_price(_sym)
+                                if not _prix:
+                                    st.error("Prix indisponible, réessaie.")
+                                    _qte = 0
+                                else:
+                                    _qte = float(_val_p) / float(_prix)
+                            _qte = round(min(_qte, _vrai["qty"]), 5)
+
+                            if _qte <= 0:
+                                st.error("Quantité à fermer nulle après arrondi (position trop petite ?).")
+                            elif abs(_qte - round(_vrai["qty"], 5)) < 1e-9:
+                                st.warning(
+                                    "Cela ferme la position ENTIÈRE — utilise l'onglet "
+                                    "'Tout fermer' si c'est bien ce que tu veux."
+                                )
+                            else:
+                                _res = (_cli.close_short(_sym, _qte) if _vrai["is_short"]
+                                        else _cli.sell(_sym, _qte))
+                                if _res and _res.get("ok"):
+                                    st.success(
+                                        "Fermé " + str(_qte) + " " + _sym
+                                        + " — reste ≈ " + str(round(_vrai["qty"] - _qte, 6))
+                                    )
+                                    _resync_json_depuis_hl(_sym)
+                                    st.rerun()
+                                else:
+                                    st.error("Échec fermeture partielle : " + str(_res))
+                    except Exception as _e:
+                        st.error("Erreur : " + str(_e))
+
+            # ── Renfort ─────────────────────────────────────────────────────
+            with _t_renfort:
+                st.caption(
+                    "Le renfort garde le sens de la position ("
+                    + _p["side"] + "). Les TP/SL posés ici ne couvrent QUE la "
+                    "quantité ajoutée — les ordres déjà en place sur les tranches "
+                    "précédentes ne sont pas touchés (comportement natif HL)."
+                )
+                _notional_add = st.number_input(
+                    "Montant à ajouter (USDC de notional)",
+                    min_value=10.0, value=100.0, step=10.0, key="add_usd_" + _sym,
+                )
+                _ca, _cb = st.columns(2)
+                _tp_add = _ca.number_input(
+                    "TP sur cette tranche (%)", 0.0, 100.0, 5.0, 0.5, key="add_tp_" + _sym
+                )
+                _sl_add = _cb.number_input(
+                    "SL sur cette tranche (%)", 0.0, 50.0, 2.5, 0.5, key="add_sl_" + _sym
+                )
+
+                if st.button("➕ Renforcer " + _sym, key="btn_add_" + _sym):
+                    try:
+                        _cli  = get_hl_client()
+                        _vrai = _cli.get_position(_sym)
+                        if _vrai is None:
+                            st.error(
+                                "Plus aucune position " + _sym + " sur HL — "
+                                "utilise 'Forcer entrée' pour en ouvrir une nouvelle."
+                            )
+                        else:
+                            _short = _vrai["is_short"]
+                            _res = (_cli.short(_sym, float(_notional_add)) if _short
+                                    else _cli.buy(_sym, float(_notional_add)))
+                            if not (_res and _res.get("ok")):
+                                st.error("Échec du renfort : " + str(_res))
+                            else:
+                                _fill = _res.get("fill_price") or _cli.get_price(_sym)
+                                st.success(
+                                    "Renfort exécuté sur " + _sym + " @ " + format(float(_fill), ".4f")
+                                )
+                                _qte_add = round(float(_notional_add) / float(_fill), 5)
+
+                                _tp_prix = None
+                                _sl_prix = None
+                                if _tp_add > 0:
+                                    _tp_prix = (_fill * (1 - _tp_add / 100) if _short
+                                                else _fill * (1 + _tp_add / 100))
+                                if _sl_add > 0:
+                                    _sl_prix = (_fill * (1 + _sl_add / 100) if _short
+                                                else _fill * (1 - _sl_add / 100))
+
+                                if _tp_prix or _sl_prix:
+                                    _tpsl = _cli.set_tp_sl(
+                                        asset=_sym, size=_qte_add, is_short=_short,
+                                        tp_price=_tp_prix, sl_price=_sl_prix,
+                                    )
+                                    _sl_pose = _tpsl.get("sl_ok", False) if _sl_prix else True
+                                    _tp_pose = _tpsl.get("tp_ok", False) if _tp_prix else True
+                                    if _sl_pose and _tp_pose:
+                                        st.success("TP/SL natifs posés sur la tranche ajoutée.")
+                                    elif not _sl_pose:
+                                        st.error(
+                                            "⚠️ SL NON POSÉ sur la tranche ajoutée — "
+                                            "cette quantité est SANS protection. "
+                                            "Interviens manuellement sur Hyperliquid."
+                                        )
+                                    else:
+                                        st.warning("TP non posé (SL OK) sur la tranche ajoutée.")
+                                else:
+                                    st.warning("Aucun TP/SL demandé : tranche ajoutée sans protection.")
+
+                                _resync_json_depuis_hl(_sym)
+                                st.rerun()
+                    except Exception as _e:
+                        st.error("Erreur : " + str(_e))
+
+    st.divider()
+
 st.subheader("4️⃣ Monitoring")
 
 state = get_state()
@@ -484,7 +703,7 @@ with st.expander("🔍 Debug — bot_state.json", expanded=False):
     st.caption(f"Chemin fichier : `{_bs_module.STATE_FILE}`")
     st.json(state)
 
-stat_col, pos_col, pnl_col = st.columns(3)
+stat_col, pnl_col = st.columns(2)
 
 with stat_col:
     mode_labels = {"local": "🖥️ Local", "testnet": "🧪 Testnet", "mainnet": "💰 Mainnet"}
@@ -500,22 +719,6 @@ with stat_col:
     if price:
         st.metric("Dernier prix", f"{float(price):.4f}")
 
-with pos_col:
-    pos = state.get("position")
-    if pos:
-        entry     = pos["entry_price"]
-        cur_price = state.get("last_price") or entry
-        pnl_pct   = (float(cur_price) - entry) / entry * 100 if not pos.get("is_short") else (entry - float(cur_price)) / entry * 100
-        color     = "#22C55E" if pnl_pct >= 0 else "#EF4444"
-        st.markdown(
-            f"**{pos['symbol']}** — {pos['side']}  \n"
-            f"Entrée : `{entry:.4f}` | Actuel : `{float(cur_price):.4f}`  \n"
-            f"PnL : <span style='color:{color};font-weight:bold'>{pnl_pct:+.2f}%</span>",
-            unsafe_allow_html=True,
-        )
-    else:
-        st.info("Aucune position ouverte")
-
 with pnl_col:
     if "mainnet" in _selected_json.lower():
         try:
@@ -524,14 +727,22 @@ with pnl_col:
             # PnL session calculé depuis HL (source de vérité)
             fills_pnl = get_hl_client()._post_info({"type": "userFills", "user": get_hl_client().address})
             pnl = sum(float(f.get("closedPnl", 0)) - float(f.get("fee", 0)) for f in fills_pnl)
+            # Nombre de trades fermés : compté depuis HL (source de vérité), pas
+            # depuis state["trades"] qui ignore tout ce qui est fait hors de l'app.
+            nb_trades_aff = len({f.get("oid") for f in fills_pnl if "Close" in f.get("dir", "")})
+            src_trades    = "sur HL"
         except Exception:
-            bal       = state.get("balance", 0)
-            bal_label = "$"
-            pnl       = state.get("pnl_session", 0.0)
+            bal           = state.get("balance", 0)
+            bal_label     = "$"
+            pnl           = state.get("pnl_session", 0.0)
+            nb_trades_aff = len(state.get("trades", []))
+            src_trades    = "local (HL injoignable)"
     else:
-        bal   = state.get("balance", 0)
-        bal_label = "$"
-        pnl   = state.get("pnl_session", 0.0)
+        bal           = state.get("balance", 0)
+        bal_label     = "$"
+        pnl           = state.get("pnl_session", 0.0)
+        nb_trades_aff = len(state.get("trades", []))
+        src_trades    = "local"
     color = "#22C55E" if pnl >= 0 else "#EF4444"
     st.markdown(
         f"**PnL Session**  \n"
@@ -539,7 +750,7 @@ with pnl_col:
         f"Capital : **{float(bal):.2f} {bal_label}**",
         unsafe_allow_html=True,
     )
-    st.caption(f"{len(state.get('trades', []))} trade(s) fermé(s)")
+    st.caption(str(nb_trades_aff) + " trade(s) fermé(s) — " + src_trades)
 
 # ---------------------------------------------------------------------------
 # Historique des trades — depuis HL directement
