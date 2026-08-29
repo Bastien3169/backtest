@@ -313,10 +313,18 @@ st.divider()
 st.subheader("3️⃣ Contrôles")
 
 state = get_state()
-c1, c2, c3, c4 = st.columns(4)
 
-with c1:
-    if st.button("▶️ Démarrer", type="primary", disabled=state.get("status") == "running"):
+if st.button("🔄 Rafraîchir la page"):
+    st.rerun()
+st.caption("Recharge toute la page — positions HL, PnL, statut du bot inclus.")
+
+st.write("")
+st.markdown("##### 🤖 Bot automatique")
+st.caption("Pilote la boucle qui surveille tes indicateurs et agit toute seule.")
+cb1, cb2, cb3 = st.columns(3)
+
+with cb1:
+    if st.button("▶️ Démarrer le bot", type="primary", disabled=state.get("status") == "running"):
         new_state = get_state()
         new_state["status"] = "running"
         new_state["mode"]   = "local" if is_local else ("testnet" if is_testnet else "mainnet")
@@ -341,8 +349,8 @@ with c1:
         st.success(f"✅ Config sauvegardée — Lance maintenant : `{bot_cmd}`")
         st.rerun()
 
-with c2:
-    if st.button("⏹️ Arrêter", disabled=state.get("status") != "running"):
+with cb2:
+    if st.button("⏹️ Arrêter le bot", disabled=state.get("status") != "running"):
         s = get_state()
         s["status"] = "stopped"
         save_state(s)
@@ -353,11 +361,7 @@ with c2:
             )
         st.rerun()
 
-with c3:
-    if st.button("🔄 Rafraîchir"):
-        st.rerun()
-
-with c4:
+with cb3:
     if st.button("🗑️ Reset session"):
         pos = get_state().get("position")
         if pos and not is_local:
@@ -393,8 +397,9 @@ with c4:
 # Indépendant du bot : fonctionne que le bot soit démarré ou arrêté.
 # ---------------------------------------------------------------------------
 if is_mainnet:
-    st.divider()
-    st.markdown("**🎯 Prendre une position maintenant**")
+    st.write("")
+    st.markdown("##### 🎯 Action manuelle")
+    st.caption("Agit tout de suite sur Hyperliquid, sans attendre aucun signal.")
 
     _sym_prise  = symbol.replace("-USD", "").replace("USDT", "")
     _sens_prise = "SHORT" if is_short else "LONG"
