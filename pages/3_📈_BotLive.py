@@ -79,6 +79,35 @@ def get_hl_client():
     from src.utils.hyperliquid_client import HyperliquidClient
     return HyperliquidClient(side=bot_side)
 
+def _resync_json_depuis_hl(symbole: str):
+    """Aligne state['position'] du bot sur la réalité HL pour ce symbole.
+    Ne touche pas au JSON si celui-ci suit un AUTRE symbole."""
+    try:
+        p_hl = get_hl_client().get_position(symbole)
+    except Exception:
+        return
+    s_json = get_state()
+    ancien = s_json.get("position") or {}
+    if ancien and ancien.get("symbol") != symbole:
+        return
+    if p_hl is None:
+        s_json["position"] = None
+    else:
+        s_json["position"] = {
+            "symbol":      p_hl["symbol"],
+            "side":        p_hl["side"],
+            "is_short":    p_hl["is_short"],
+            "entry_price": p_hl["entry_price"],
+            "qty":         p_hl["qty"],
+            "size_usdt":   p_hl["size_usdt"],
+            "margin_usdt": p_hl.get("margin_used") or ancien.get("margin_usdt", 0),
+            "leverage":    p_hl.get("leverage") or ancien.get("leverage", 1),
+            "ts":          ancien.get("ts") or datetime.now().isoformat(),
+            "protected":   ancien.get("protected", False),
+        }
+    save_state(s_json)
+
+
 # ---------------------------------------------------------------------------
 # 1️⃣ Mode de trading
 # ---------------------------------------------------------------------------
@@ -318,60 +347,15 @@ with c2:
         s["status"] = "stopped"
         save_state(s)
         if s.get("position") and is_mainnet:
-            st.warning("⚠️ Bot arrêté mais position toujours ouverte sur HL — utilise '🔴 Arrêter + Fermer' pour tout couper.")
+            st.warning(
+                "⚠️ Bot arrêté, mais la position reste ouverte sur HL — "
+                "ferme-la depuis le panneau 📡 Positions ouvertes sur Hyperliquid."
+            )
         st.rerun()
 
 with c3:
     if st.button("🔄 Rafraîchir"):
         st.rerun()
-
-# Bouton Arrêter + Fermer
-pos_ouverte = get_state().get("position")
-if is_mainnet and pos_ouverte and state.get("status") == "running":
-    st.caption(
-        "Arrête le bot ET ferme sa position sur HL. "
-        "La quantité fermée est relue en direct depuis Hyperliquid "
-        "(voir le panneau 📡 pour les chiffres réels)."
-    )
-    if st.button("🔴 Arrêter + Fermer position", type="primary"):
-        try:
-            client_stop  = get_hl_client()
-            symbol_stop  = pos_ouverte.get("symbol", "BTC")
-            # SÉCURITÉ : relire la position REELLE sur HL. Un qty local périmé
-            # (renfort ou clôture partielle hors app) laisserait un reliquat
-            # ouvert et NON protégé sur Hyperliquid.
-            _vrai_stop   = client_stop.get_position(symbol_stop)
-            if _vrai_stop is None:
-                st.warning("Aucune position " + symbol_stop + " sur HL — le bot est simplement arrêté.")
-                _s_stop = get_state()
-                _s_stop["status"]   = "stopped"
-                _s_stop["position"] = None
-                save_state(_s_stop)
-                st.rerun()
-            qty_stop     = round(_vrai_stop["qty"], 5)
-            is_short_pos = _vrai_stop["is_short"]
-            res = client_stop.close_short(symbol_stop, qty_stop) if is_short_pos else client_stop.sell(symbol_stop, qty_stop)
-            if res and res["ok"]:
-                fill    = res.get("fill_price") or pos_ouverte["entry_price"]
-                pnl_pct = (fill - pos_ouverte["entry_price"]) / pos_ouverte["entry_price"] * 100 if not is_short_pos else (pos_ouverte["entry_price"] - fill) / pos_ouverte["entry_price"] * 100
-                pnl_usd = round(pos_ouverte["qty"] * fill - pos_ouverte.get("size_usdt", 0), 2) if not is_short_pos else round(pos_ouverte.get("size_usdt", 0) - pos_ouverte["qty"] * fill, 2)
-                s = get_state()
-                s["status"] = "stopped"
-                s["trades"].append({
-                    "ts": datetime.now().isoformat(), "symbol": pos_ouverte["symbol"],
-                    "side": pos_ouverte["side"], "entry_price": pos_ouverte["entry_price"],
-                    "exit_price": fill, "qty": pos_ouverte["qty"],
-                    "pnl_pct": round(pnl_pct, 2), "pnl_usd": pnl_usd,
-                    "raison": "Arrêt + Clôture forcée",
-                })
-                s["position"] = None
-                save_state(s)
-                st.success(f"✅ Bot arrêté + Position fermée @ {fill:.2f}$ | PnL: {pnl_usd:+.2f}$")
-                st.rerun()
-            else:
-                st.error(f"❌ Échec clôture HL : {res}")
-        except Exception as e:
-            st.error(f"❌ Erreur : {e}")
 
 with c4:
     if st.button("🗑️ Reset session"):
@@ -403,54 +387,136 @@ with c4:
             reset()
             st.rerun()
 
-# Bouton Forcer entrée
-if is_mainnet and state.get("status") == "running" and not get_state().get("position"):
+# ---------------------------------------------------------------------------
+# 🎯 Prendre une position — utilise la configuration de la section 2 TELLE
+# QU'AFFICHÉE À L'ÉCRAN (actif, direction, taille, levier, TP/SL).
+# Indépendant du bot : fonctionne que le bot soit démarré ou arrêté.
+# ---------------------------------------------------------------------------
+if is_mainnet:
     st.divider()
-    st.markdown("**⚡ Forcer une entrée maintenant**")
-    st.caption("Ignore last_entry_date et entre immédiatement au prix du marché")
-    direction_forcee = st.radio("Direction", ["🟢 Long", "🔴 Short"], horizontal=True, key="force_dir")
-    is_short_force   = direction_forcee == "🔴 Short"
-    if st.button("⚡ Forcer entrée", type="primary"):
+    st.markdown("**🎯 Prendre une position maintenant**")
+
+    _sym_prise  = symbol.replace("-USD", "").replace("USDT", "")
+    _sens_prise = "SHORT" if is_short else "LONG"
+
+    try:
+        _solde_prise = get_hl_client().get_balance()
+    except Exception:
+        _solde_prise = 0.0
+    _marge_prise    = _solde_prise * (size_pct / 100)
+    _notional_prise = _marge_prise * leverage
+
+    st.caption(
+        "Entrée au marché sur **" + _sym_prise + "** en **" + _sens_prise + "** — "
+        + format(_marge_prise, ".2f") + " USDC de marge × " + str(leverage)
+        + " = " + format(_notional_prise, ".2f") + " USDC de notional · "
+        + (("TP " + format(tp_pct, ".1f") + "%") if tp_pct else "aucun TP")
+        + " / "
+        + (("SL " + format(sl_pct, ".1f") + "%") if sl_pct else "aucun SL")
+        + " (réglés dans la section 2)"
+    )
+    if not sl_pct:
+        st.warning(
+            "⚠️ Aucun Stop Loss configuré en section 2 — la position serait ouverte "
+            "SANS protection automatique sur Hyperliquid."
+        )
+
+    if st.button("🎯 Prendre la position " + _sens_prise + " " + _sym_prise,
+                 type="primary", key="btn_prise_position"):
         try:
-            client_entree   = get_hl_client()
-            balance_entree  = client_entree.get_balance()
-            config_entree   = get_state().get("strategy", {})
-            size_pct_entree = config_entree.get("size_pct", 10)
-            leverage_entree = config_entree.get("leverage", 1)
-            size_usd_entree = balance_entree * (size_pct_entree / 100)
-            notional_entree = size_usd_entree * leverage_entree
-            symbol_entree   = config_entree.get("symbol", "BTCUSDT").replace("USDT", "")
-            tp_pct_entree   = config_entree.get("tp_pct")
-            sl_pct_entree   = config_entree.get("sl_pct")
-            if size_usd_entree < 10:
-                st.error(f"⚠️ Solde insuffisant ({balance_entree:.2f} USDC)")
+            _cli_p = get_hl_client()
+
+            # Garde-fou : une position existe-t-elle DÉJÀ sur CE symbole ?
+            # Lu en direct sur HL (pas dans le JSON) — les autres symboles ne
+            # bloquent pas l'entrée.
+            _deja = _cli_p.get_position(_sym_prise)
+
+            if _deja is not None:
+                st.error(
+                    "Une position " + _deja["side"] + " existe déjà sur " + _sym_prise
+                    + " (" + str(round(_deja["qty"], 6)) + "). Pour l'augmenter, "
+                    "utilise l'onglet ➕ Renforcer du panneau 📡 ci-dessous."
+                )
+            elif _marge_prise < 10:
+                st.error(
+                    "Marge trop faible : " + format(_marge_prise, ".2f")
+                    + " USDC (minimum ~10). Solde HL : "
+                    + format(_solde_prise, ".2f") + " USDC."
+                )
             else:
-                if leverage_entree > 1:
-                    get_hl_client().set_leverage(symbol_entree, leverage_entree)
-                res = client_entree.short(symbol_entree, notional_entree) if is_short_force else client_entree.buy(symbol_entree, notional_entree)
-                if res and res["ok"]:
-                    fill = res.get("fill_price", 0)
-                    qty  = round(notional_entree / fill, 6)
-                    s    = get_state()
-                    s["position"] = {
-                        "symbol": symbol_entree, "side": "SHORT" if is_short_force else "LONG",
-                        "is_short": is_short_force, "entry_price": fill,
-                        "qty": qty, "size_usdt": notional_entree,
-                        "margin_usdt": size_usd_entree, "leverage": leverage_entree,
-                        "ts": datetime.now().isoformat(),
-                    }
-                    s["last_entry_date"] = datetime.now().strftime("%Y-%m-%d")
-                    save_state(s)
-                    if tp_pct_entree or sl_pct_entree:
-                        tp_prix = fill * (1 + tp_pct_entree/100) if tp_pct_entree and not is_short_force else (fill * (1 - tp_pct_entree/100) if tp_pct_entree else None)
-                        sl_prix = fill * (1 - sl_pct_entree/100) if sl_pct_entree and not is_short_force else (fill * (1 + sl_pct_entree/100) if sl_pct_entree else None)
-                        client_entree.set_tp_sl(symbol_entree, qty, is_short_force, tp_prix, sl_prix)
-                    st.success(f"✅ {'SHORT' if is_short_force else 'LONG'} ouvert @ {fill:.2f}$ | {size_usd_entree:.2f} USDC")
-                    st.rerun()
+                if leverage > 1:
+                    _lev_res = _cli_p.set_leverage(_sym_prise, int(leverage))
+                    if not _lev_res.get("ok"):
+                        st.warning("Levier non configuré (" + str(_lev_res) + ") — ouverture en x1.")
+
+                _res_p = (_cli_p.short(_sym_prise, _notional_prise) if is_short
+                          else _cli_p.buy(_sym_prise, _notional_prise))
+
+                if not (_res_p and _res_p.get("ok")):
+                    st.error("Ordre échoué : " + str(_res_p))
                 else:
-                    st.error(f"❌ Ordre échoué : {res}")
-        except Exception as e:
-            st.error(f"❌ Erreur : {e}")
+                    _fill_p = _res_p.get("fill_price") or _cli_p.get_price(_sym_prise)
+                    _qty_p  = round(_notional_prise / float(_fill_p), 5)
+                    st.success(
+                        "Position " + _sens_prise + " ouverte sur " + _sym_prise
+                        + " @ " + format(float(_fill_p), ".4f")
+                    )
+
+                    # La stratégie affichée devient celle enregistrée pour ce bot :
+                    # si le bot passe en running, il gérera cette position avec
+                    # exactement les paramètres utilisés pour l'ouvrir.
+                    _s_p = get_state()
+                    _s_p["mode"]     = "mainnet"
+                    _s_p["strategy"] = {
+                        "symbol":         symbol,
+                        "timeframe":      timeframe,
+                        "size_pct":       size_pct,
+                        "tp_pct":         tp_pct,
+                        "sl_pct":         sl_pct,
+                        "is_short":       is_short,
+                        "check_time_utc": check_time_utc,
+                        "interval_min":   interval_min,
+                        "ind_entry":      ind_entry,
+                        "ind_exit":       ind_exit,
+                        "leverage":       leverage,
+                    }
+                    _s_p["last_entry_date"] = datetime.now().strftime("%Y-%m-%d")
+                    save_state(_s_p)
+
+                    # TP/SL natifs sur la quantité ouverte
+                    _tp_p = None
+                    _sl_p = None
+                    if tp_pct:
+                        _tp_p = (_fill_p * (1 - tp_pct / 100) if is_short
+                                 else _fill_p * (1 + tp_pct / 100))
+                    if sl_pct:
+                        _sl_p = (_fill_p * (1 + sl_pct / 100) if is_short
+                                 else _fill_p * (1 - sl_pct / 100))
+
+                    if _tp_p or _sl_p:
+                        _r_p   = _cli_p.set_tp_sl(
+                            asset=_sym_prise, size=_qty_p, is_short=is_short,
+                            tp_price=_tp_p, sl_price=_sl_p,
+                        )
+                        _sl_ok = _r_p.get("sl_ok", False) if _sl_p else True
+                        _tp_ok = _r_p.get("tp_ok", False) if _tp_p else True
+                        if _sl_ok and _tp_ok:
+                            st.success("TP/SL natifs posés sur Hyperliquid.")
+                        elif not _sl_ok:
+                            st.error(
+                                "⚠️ SL NON POSÉ — la position est SANS protection. "
+                                "Interviens manuellement sur Hyperliquid."
+                            )
+                        else:
+                            st.warning("TP non posé (SL OK) — position protégée mais sans TP.")
+                    else:
+                        st.warning("Aucun TP/SL demandé : position ouverte sans protection.")
+
+                    # Aligner le JSON du bot sur la réalité HL
+                    _resync_json_depuis_hl(_sym_prise)
+                    st.rerun()
+        except Exception as _e_p:
+            st.error("Erreur : " + str(_e_p))
 
 if state.get("status") == "running":
     mode_key = state.get("mode", "local")
@@ -470,34 +536,6 @@ st.divider()
 if is_mainnet:
     st.subheader("📡 Positions ouvertes sur Hyperliquid")
     st.caption("Lu en direct depuis HL — inclut les positions ouvertes à la main, hors bot.")
-
-    def _resync_json_depuis_hl(symbole: str):
-        """Aligne state['position'] du bot sur la réalité HL pour ce symbole.
-        Ne touche pas au JSON si celui-ci suit un AUTRE symbole."""
-        try:
-            p_hl = get_hl_client().get_position(symbole)
-        except Exception:
-            return
-        s_json = get_state()
-        ancien = s_json.get("position") or {}
-        if ancien and ancien.get("symbol") != symbole:
-            return
-        if p_hl is None:
-            s_json["position"] = None
-        else:
-            s_json["position"] = {
-                "symbol":      p_hl["symbol"],
-                "side":        p_hl["side"],
-                "is_short":    p_hl["is_short"],
-                "entry_price": p_hl["entry_price"],
-                "qty":         p_hl["qty"],
-                "size_usdt":   p_hl["size_usdt"],
-                "margin_usdt": p_hl.get("margin_used") or ancien.get("margin_usdt", 0),
-                "leverage":    p_hl.get("leverage") or ancien.get("leverage", 1),
-                "ts":          ancien.get("ts") or datetime.now().isoformat(),
-                "protected":   ancien.get("protected", False),
-            }
-        save_state(s_json)
 
     try:
         _positions_live = get_hl_client().get_open_positions()
@@ -644,7 +682,7 @@ if is_mainnet:
                         if _vrai is None:
                             st.error(
                                 "Plus aucune position " + _sym + " sur HL — "
-                                "utilise 'Forcer entrée' pour en ouvrir une nouvelle."
+                                "utilise le bouton 🎯 Prendre une position (section 3)."
                             )
                         else:
                             _short = _vrai["is_short"]
