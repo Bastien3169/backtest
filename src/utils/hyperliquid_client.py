@@ -457,3 +457,77 @@ class HyperliquidClient:
             if p["symbol"] == asset:
                 return p
         return None
+
+    def get_open_orders(self, asset: str | None = None) -> list:
+        """
+        Ordres actuellement EN ATTENTE sur ce wallet : TP/SL natifs, ordres
+        limites. Lecture seule -- n'annule et ne modifie strictement rien.
+
+        asset : "BTC" pour filtrer sur un symbole, None pour tout le wallet.
+
+        Retourne une liste de dicts. Leve une exception si l'API est
+        injoignable -- meme contrat que get_open_positions : l'appelant ne doit
+        SURTOUT pas conclure "aucun ordre" sur une erreur reseau.
+        """
+        raw = self._post_info({"type": "frontendOpenOrders", "user": self.address})
+        if not isinstance(raw, list):
+            raw = []
+
+        cible = None
+        if asset:
+            cible = (asset or "").replace("-USD", "").replace("USDT", "")
+
+        ordres = []
+        for o in raw:
+            if not isinstance(o, dict):
+                continue
+            sym = o.get("coin", "?")
+            if cible and sym != cible:
+                continue
+
+            def _f(*keys):
+                """Premiere cle presente et convertible en float, sinon None.
+                Plusieurs orthographes acceptees : l'API HL a deja renomme des
+                champs par le passe, on ne veut pas casser l'affichage pour ca."""
+                for key in keys:
+                    v = o.get(key)
+                    if v in (None, ""):
+                        continue
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        continue
+                return None
+
+            # Classement TP / SL : HL renvoie un libelle du type
+            # "Take Profit Market" ou "Stop Market".
+            type_brut = str(o.get("orderType") or o.get("order_type") or "")
+            t_low     = type_brut.lower()
+            if "take profit" in t_low or o.get("tpsl") == "tp":
+                kind = "TP"
+            elif "stop" in t_low or o.get("tpsl") == "sl":
+                kind = "SL"
+            elif o.get("isTrigger"):
+                kind = "TRIGGER"
+            else:
+                kind = "LIMIT"
+
+            qty = _f("sz", "size", "origSz") or 0.0
+
+            ordres.append({
+                "symbol":      sym,
+                "oid":         o.get("oid"),
+                "kind":        kind,
+                # "B" = achat, "A" = vente cote HL
+                "side":        "BUY" if o.get("side") == "B" else "SELL",
+                # 0 = ordre lie a la position entiere (grouping positionTpsl)
+                "qty":         qty,
+                "trigger_px":  _f("triggerPx", "trigger_px", "triggerPrice"),
+                "limit_px":    _f("limitPx", "limit_px", "px"),
+                "reduce_only": bool(o.get("reduceOnly") or o.get("reduce_only") or False),
+                "order_type":  type_brut or ("Trigger" if o.get("isTrigger") else "Limit"),
+                # Payload brut conserve : permet d'afficher un debug lisible dans
+                # l'UI si un jour HL renomme un champ.
+                "_raw":        o,
+            })
+        return ordres

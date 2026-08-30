@@ -116,13 +116,21 @@ def _fmt_qte(q):
     return s if s else "0"
 
 
-def _ligne_ordre(o):
-    """Une ligne markdown décrivant un ordre TP/SL/limite en attente sur HL."""
+def _ligne_ordre(o, qty_pos=None):
+    """Une ligne markdown décrivant un ordre TP/SL/limite en attente sur HL.
+
+    qty_pos : taille de la position, pour exprimer l'ordre en % de celle-ci.
+    Sur HL on saisit souvent une taille en dollars, ici tout est en unités de
+    l'actif — sans ce %, impossible de rapprocher les deux affichages."""
     icone  = {"TP": "🎯", "SL": "🛑", "LIMIT": "📄", "TRIGGER": "⚡"}.get(o["kind"], "•")
     px     = o["trigger_px"] or o["limit_px"]
     px_txt = format(float(px), ".4f") if px else "?"
+    part   = ""
+    if qty_pos and o["qty"]:
+        part = (" · " + format(float(o["qty"]) / float(qty_pos) * 100.0, ".0f")
+                + " % de la position")
     return (icone + " **" + o["kind"] + "** · " + _fmt_qte(o["qty"])
-            + " · déclenche @ `" + px_txt + "`")
+            + " · déclenche @ `" + px_txt + "`" + part)
 
 
 def _couverture_sl(position, ordres_sym):
@@ -657,7 +665,8 @@ if is_mainnet:
                 if _ord_sym:
                     _tries = sorted(_ord_sym,
                                     key=lambda x: (x["kind"] != "SL", x["trigger_px"] or 0))
-                    st.markdown("\n".join("- " + _ligne_ordre(_o) for _o in _tries))
+                    st.markdown("\n".join(
+                        "- " + _ligne_ordre(_o, _p["qty"]) for _o in _tries))
                     if _pct_sl > 101.0:
                         st.caption(
                             "Stops plus gros que la position — normal après une "
