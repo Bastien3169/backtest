@@ -250,10 +250,16 @@ cfg1, cfg2, cfg3 = st.columns(3)
 with cfg1:
     _all_assets   = get_all_assets()
     _asset_labels = [f"{c['symbol']} — {c['name']}" for c in _all_assets]
-    _asset_map    = {f"{c['symbol']} — {c['name']}": c["id"] for c in _all_assets}
+    _asset_map    = {f"{c['symbol']} — {c['name']}": c for c in _all_assets}
 
     asset_label = st.selectbox("Actif", _asset_labels, index=0)
-    asset_id    = _asset_map[asset_label]
+    _asset      = _asset_map[asset_label]
+    asset_id    = _asset["id"]
+    # Nom de l'actif sur Hyperliquid — donnée explicite, JAMAIS déduite du
+    # ticker Yahoo : Hyperliquid s'appelle "HYPE" chez HL mais "HYPE32196-USD"
+    # chez Yahoo, et un .replace("-USD","") donnerait "HYPE32196", actif
+    # inconnu de HL — l'ordre partirait dans le vide.
+    hl_name     = _asset.get("hl_name") or _asset["symbol"]
 
     if is_local:
         symbol = asset_id
@@ -384,6 +390,7 @@ with cb1:
             new_state["balance_init"] = capital
         new_state["strategy"] = {
             "symbol":         symbol,
+            "hl_name":        hl_name,
             "timeframe":      timeframe,
             "size_pct":       size_pct,
             "tp_pct":         tp_pct,
@@ -452,8 +459,18 @@ if is_mainnet:
     st.markdown("##### 🎯 Action manuelle")
     st.caption("Agit tout de suite sur Hyperliquid, sans attendre aucun signal.")
 
-    _sym_prise  = symbol.replace("-USD", "").replace("USDT", "")
+    _sym_prise  = hl_name
     _sens_prise = "SHORT" if is_short else "LONG"
+    # Actif absent de Hyperliquid (indice boursier, entrée héritée d'un vieux
+    # coins.py) : on neutralise le bouton sans interrompre la page — le panneau
+    # des positions ouvertes plus bas doit rester accessible.
+    _hl_indispo = (not _sym_prise) or asset_id.startswith("^")
+    if _hl_indispo:
+        st.error(
+            "**" + asset_label + "** n'est pas tradable sur Hyperliquid. "
+            "Choisis un autre actif en section 2 — le panneau des positions "
+            "ouvertes ci-dessous reste utilisable."
+        )
 
     try:
         _solde_prise = get_hl_client().get_balance()
@@ -477,8 +494,9 @@ if is_mainnet:
             "SANS protection automatique sur Hyperliquid."
         )
 
-    if st.button("🎯 Prendre la position " + _sens_prise + " " + _sym_prise,
-                 type="primary", key="btn_prise_position"):
+    if st.button("🎯 Prendre la position " + _sens_prise + " " + str(_sym_prise),
+                 type="primary", key="btn_prise_position",
+                 disabled=_hl_indispo):
         try:
             _cli_p = get_hl_client()
 
@@ -512,7 +530,7 @@ if is_mainnet:
                     st.error("Ordre échoué : " + str(_res_p))
                 else:
                     _fill_p = _res_p.get("fill_price") or _cli_p.get_price(_sym_prise)
-                    _qty_p  = round(_notional_prise / float(_fill_p), 5)
+                    _qty_p  = _cli_p.round_size(_sym_prise, _notional_prise / float(_fill_p))
                     st.success(
                         "Position " + _sens_prise + " ouverte sur " + _sym_prise
                         + " @ " + format(float(_fill_p), ".4f")
@@ -525,6 +543,7 @@ if is_mainnet:
                     _s_p["mode"]     = "mainnet"
                     _s_p["strategy"] = {
                         "symbol":         symbol,
+                        "hl_name":        hl_name,
                         "timeframe":      timeframe,
                         "size_pct":       size_pct,
                         "tp_pct":         tp_pct,
@@ -722,7 +741,7 @@ if is_mainnet:
                             _resync_json_depuis_hl(_sym)
                             st.rerun()
                         else:
-                            _qte = round(_vrai["qty"], 5)
+                            _qte = _cli.round_size(_sym, _vrai["qty"])
                             _res = (_cli.close_short(_sym, _qte) if _vrai["is_short"]
                                     else _cli.sell(_sym, _qte))
                             if _res and _res.get("ok"):
@@ -767,11 +786,11 @@ if is_mainnet:
                                     _qte = 0
                                 else:
                                     _qte = float(_val_p) / float(_prix)
-                            _qte = round(min(_qte, _vrai["qty"]), 5)
+                            _qte = _cli.round_size(_sym, min(_qte, _vrai["qty"]))
 
                             if _qte <= 0:
                                 st.error("Quantité à fermer nulle après arrondi (position trop petite ?).")
-                            elif abs(_qte - round(_vrai["qty"], 5)) < 1e-9:
+                            elif abs(_qte - _cli.round_size(_sym, _vrai["qty"])) < 1e-9:
                                 st.warning(
                                     "Cela ferme la position ENTIÈRE — utilise l'onglet "
                                     "'Tout fermer' si c'est bien ce que tu veux."
@@ -831,7 +850,7 @@ if is_mainnet:
                                 st.success(
                                     "Renfort exécuté sur " + _sym + " @ " + format(float(_fill), ".4f")
                                 )
-                                _qte_add = round(float(_notional_add) / float(_fill), 5)
+                                _qte_add = _cli.round_size(_sym, float(_notional_add) / float(_fill))
 
                                 _tp_prix = None
                                 _sl_prix = None
@@ -926,7 +945,7 @@ if is_mainnet:
                                           else _b * (1 - _sl_prot / 100))
                                          if _sl_prot > 0 else None)
                                 _r = _cli.set_tp_sl(
-                                    asset=_sym, size=round(_vrai["qty"], 5),
+                                    asset=_sym, size=_cli.round_size(_sym, _vrai["qty"]),
                                     is_short=_crt, tp_price=_tp_f, sl_price=_sl_f,
                                 )
                                 _ok_sl = _r.get("sl_ok", False) if _sl_f else True

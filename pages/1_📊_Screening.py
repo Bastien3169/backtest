@@ -240,8 +240,14 @@ for _, row in df_filtered.iterrows():
     with c7:
         spark = row.get("sparkline", [])
         if len(spark) >= 2:
+            # key obligatoire : sans elle, Streamlit calcule l'identifiant du
+            # graphe à partir de son contenu. Deux cryptos au tracé identique
+            # (typiquement des tickers Yahoo figés/délistés, sparkline plate à
+            # [50, 50, ...] et perf 0 %) produisent alors le MÊME id et la page
+            # plante avec StreamlitDuplicateElementId.
             st.plotly_chart(sparkline_fig(spark, row["perf_7d"]),
                             width='content',
+                            key=f"spark_{row['ticker']}",
                             config={"displayModeBar": False})
         else:
             st.caption("—")

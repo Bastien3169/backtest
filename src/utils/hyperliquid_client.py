@@ -27,6 +27,7 @@ Clés dans Railway Variables (ou .env local) :
 # Imports
 # ---------------------------------------------------------------------------
 import os
+import math
 import time
 import requests
 import pandas as pd
@@ -117,6 +118,52 @@ class HyperliquidClient:
         )
         r.raise_for_status()
         return r.json()
+
+    # ── Arrondis conformes aux règles Hyperliquid ─────────────────────────
+    # HL refuse un ordre dont :
+    #   - la QUANTITE a plus de szDecimals décimales (propre à chaque actif :
+    #     5 pour BTC, 2 pour HYPE/SOL, 0 pour DOGE...)
+    #   - le PRIX a plus de 5 chiffres significatifs OU plus de
+    #     (6 - szDecimals) décimales. Les prix entiers sont toujours valides.
+    # C'est pourquoi l'ancien code (round(size, 5) et int(price)) ne marchait
+    # que sur BTC : szDecimals=5 et prix à 6 chiffres.
+
+    _META_CACHE = None
+
+    def _meta(self) -> dict:
+        """Métadonnées de l'univers HL, mises en cache au niveau de la classe."""
+        cls = type(self)
+        if cls._META_CACHE is None:
+            cls._META_CACHE = self._post_info({"type": "meta"})
+        return cls._META_CACHE
+
+    def sz_decimals(self, asset: str) -> int:
+        """Nombre de décimales autorisées sur la QUANTITE pour cet actif."""
+        try:
+            for c in self._meta().get("universe", []):
+                if c.get("name") == asset:
+                    return int(c.get("szDecimals", 2))
+        except Exception as e:
+            print(f"meta HL illisible ({e}) — szDecimals par défaut 2")
+        return 2
+
+    def round_size(self, asset: str, size: float) -> float:
+        """Arrondit une quantité au pas autorisé pour cet actif."""
+        return round(float(size), self.sz_decimals(asset))
+
+    def round_px(self, asset: str, px: float) -> float:
+        """Arrondit un prix aux règles HL (5 chiffres significatifs max,
+        (6 - szDecimals) décimales max, entier toujours valide)."""
+        px = float(px)
+        if px <= 0:
+            return px
+        max_dec = 6 - self.sz_decimals(asset)
+        exposant = math.floor(math.log10(abs(px)))
+        dec_sig  = max(0, 5 - 1 - exposant)      # 5 chiffres significatifs
+        dec      = max(0, min(dec_sig, max_dec))
+        if dec == 0:
+            return float(int(round(px)))
+        return round(px, dec)
 
     # ── Test connexion ────────────────────────────────────────────────────
 
@@ -212,8 +259,13 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
-            size     = round(size_usd / price, 5)
-            limit_px = int(price * 1.01)   # HL exige un entier pour BTC
+            size     = self.round_size(asset, size_usd / price)
+            if size <= 0:
+                return {"ok": False, "fill_price": 0,
+                        "message": f"Montant trop petit : {size_usd} $ sur {asset} "
+                                   f"donne une quantité nulle une fois arrondie "
+                                   f"au pas de l'actif ({self.sz_decimals(asset)} décimales)."}
+            limit_px = self.round_px(asset, price * 1.01)   # IOC agressif
             result   = self._exchange.order(
                 asset, True, size, limit_px, {"limit": {"tif": "Ioc"}}
             )
@@ -235,8 +287,11 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
-            size     = round(size, 5)      # HL exige max 5 décimales
-            limit_px = int(price * 0.99)   # HL exige un entier pour BTC
+            size     = self.round_size(asset, size)
+            if size <= 0:
+                return {"ok": False, "fill_price": 0,
+                        "message": f"Quantité nulle après arrondi au pas de {asset}."}
+            limit_px = self.round_px(asset, price * 0.99)   # IOC agressif
             result   = self._exchange.order(
                 asset, False, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
@@ -259,8 +314,13 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
-            size     = round(size_usd / price, 5)
-            limit_px = int(price * 0.99)   # HL exige un entier pour BTC
+            size     = self.round_size(asset, size_usd / price)
+            if size <= 0:
+                return {"ok": False, "fill_price": 0,
+                        "message": f"Montant trop petit : {size_usd} $ sur {asset} "
+                                   f"donne une quantité nulle une fois arrondie "
+                                   f"au pas de l'actif ({self.sz_decimals(asset)} décimales)."}
+            limit_px = self.round_px(asset, price * 0.99)   # IOC agressif
             result   = self._exchange.order(
                 asset, False, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=False
@@ -307,15 +367,19 @@ class HyperliquidClient:
         """
         results = {}
         try:
-            size = round(size, 5)  # HL exige max 5 décimales pour les ordres trigger
+            size = self.round_size(asset, size)  # pas de quantité propre à l'actif
+            if size <= 0:
+                return {"ok": False, "tp_ok": False, "sl_ok": False,
+                        "message": f"Quantité nulle après arrondi au pas de {asset} — "
+                                   f"aucun TP/SL posable."}
             # Pour un LONG : fermer = vendre (is_buy=False)
             # Pour un SHORT : fermer = acheter (is_buy=True)
             is_buy_to_close = is_short
 
             if tp_price:
-                tp_px = int(tp_price)
+                tp_px = self.round_px(asset, tp_price)
                 # limit_px agressif : pour TP long on vend → limit bas / pour TP short on achète → limit haut
-                tp_limit = int(tp_px * 0.995) if not is_short else int(tp_px * 1.005)
+                tp_limit = self.round_px(asset, tp_px * (1.005 if is_short else 0.995))
                 tp_result = self._exchange.order(
                     asset,
                     is_buy_to_close,
@@ -335,9 +399,9 @@ class HyperliquidClient:
                 print(f"TP natif @ {tp_px} : {'✅' if tp_ok else '❌'} {tp_result}")
 
             if sl_price:
-                sl_px = int(sl_price)
+                sl_px = self.round_px(asset, sl_price)
                 # limit_px agressif : pour SL long on vend → limit très bas / pour SL short on achète → limit très haut
-                sl_limit = int(sl_px * 0.995) if not is_short else int(sl_px * 1.005)
+                sl_limit = self.round_px(asset, sl_px * (1.005 if is_short else 0.995))
                 sl_result = self._exchange.order(
                     asset,
                     is_buy_to_close,
@@ -381,8 +445,11 @@ class HyperliquidClient:
             price    = self.get_price(asset)
             if not price:
                 return {"ok": False, "message": "Prix indisponible", "fill_price": 0}
-            size     = round(size, 5)      # HL exige max 5 décimales
-            limit_px = int(price * 1.01)   # HL exige un entier pour BTC
+            size     = self.round_size(asset, size)
+            if size <= 0:
+                return {"ok": False, "fill_price": 0,
+                        "message": f"Quantité nulle après arrondi au pas de {asset}."}
+            limit_px = self.round_px(asset, price * 1.01)   # IOC agressif
             result   = self._exchange.order(
                 asset, True, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
