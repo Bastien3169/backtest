@@ -200,7 +200,10 @@ def run():
             # JSON dessus. Couvre : fermeture par TP/SL natif, position ouverte
             # à la main sur HL (adoption), renfort ou clôture partielle hors bot.
             _cfg_now    = state.get("strategy", {}) or {}
-            _symbol_now = _cfg_now.get("symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")
+            # hl_name est écrit par BotLive ; repli sur l'ancien bricolage de
+            # chaîne pour les bot_state*.json enregistrés avant ce champ.
+            _symbol_now = _cfg_now.get("hl_name") or _cfg_now.get(
+                "symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")
 
             _hl_ok  = True
             _pos_hl = None
@@ -287,7 +290,8 @@ def run():
 
             # ── Config depuis le JSON ──────────────────────────────────────
             cfg       = state.get("strategy", {})
-            symbol    = cfg.get("symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")  # BTC-USD → BTC
+            symbol    = cfg.get("hl_name") or cfg.get(
+                "symbol", "BTC-USD").replace("-USD", "").replace("USDT", "")  # nom HL
             timeframe = cfg.get("timeframe", "1h")
             tp_pct    = cfg.get("tp_pct")
             sl_pct    = cfg.get("sl_pct")

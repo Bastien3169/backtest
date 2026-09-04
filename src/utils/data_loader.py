@@ -39,17 +39,32 @@ def _load_coins_fresh() -> tuple[list[dict], list[dict]]:
     return coins, indices
 
 
+def _expose(c: dict) -> dict:
+    """Format exposé aux pages.
+
+    hl_name = nom de l'actif sur Hyperliquid. Il NE se déduit PAS du ticker
+    Yahoo : Hyperliquid est "HYPE" chez HL et "HYPE32196-USD" chez Yahoo.
+    Repli sur symbol pour rester compatible avec un coins.py d'ancienne
+    génération (avant l'ajout du champ).
+    """
+    return {
+        "id":      c["ticker"],
+        "symbol":  c["symbol"],
+        "name":    c["name"],
+        "hl_name": c.get("hl_name") or c["symbol"],
+    }
+
+
 def get_top100_coins() -> list[dict]:
     """Cryptos uniquement — pour le dropdown app.py et le screener."""
     coins, _ = _load_coins_fresh()
-    return [{"id": c["ticker"], "symbol": c["symbol"], "name": c["name"]} for c in coins]
+    return [_expose(c) for c in coins]
 
 
 def get_all_assets() -> list[dict]:
     """Cryptos + indices — pour le backtest app.py dropdown complet."""
     coins, indices = _load_coins_fresh()
-    all_assets = coins + indices
-    return [{"id": c["ticker"], "symbol": c["symbol"], "name": c["name"]} for c in all_assets]
+    return [_expose(c) for c in coins + indices]
 
 
 def fetch_ohlcv(coin_id: str, timeframe: str, duree_max_jours: int = 365) -> pd.DataFrame:
