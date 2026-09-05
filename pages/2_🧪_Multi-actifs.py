@@ -1,6 +1,14 @@
 """
-pages/2_🤖_Scanner.py
-Lance automatiquement une stratégie sur une sélection de cryptos.
+pages/2_🧪_Multi-actifs.py
+UNE stratégie, testée sur PLUSIEURS actifs et PLUSIEURS périodes.
+
+À ne pas confondre avec les deux autres pages de test :
+    Backtest (app.py)  : 1 stratégie × 1 actif  × 1 période
+    Multi-actifs (ici) : 1 stratégie × N actifs × N périodes
+    Optimisation       : N réglages  × 1 actif  × N périodes
+
+Ici la stratégie ne bouge pas : on cherche si elle tient ailleurs que là où
+elle a été trouvée. C'est un test de robustesse, pas une recherche de réglage.
 """
 
 import sys, os
@@ -16,9 +24,9 @@ from src.utils.data_loader import fetch_ohlcv, get_all_assets
 from src.controllers.backtest import run_backtest_single
 from src.views.indicator_bloc import render_indicator_bloc
 
-st.set_page_config(page_title="Scanner", page_icon="🤖", layout="wide")
-st.title("🤖 Scanner — Cryptos & Indices")
-st.caption("Configure une stratégie, choisis tes actifs, compare les résultats.")
+st.set_page_config(page_title="Multi-actifs", page_icon="🧪", layout="wide")
+st.title("🧪 Multi-actifs — une stratégie, plusieurs marchés")
+st.caption("Fige une stratégie, lance-la sur plusieurs actifs et plusieurs périodes, et regarde où elle tient. Test de robustesse — pour chercher un réglage, va en Optimisation.")
 
 # ---------------------------------------------------------------------------
 # 1️⃣ Sélection des actifs

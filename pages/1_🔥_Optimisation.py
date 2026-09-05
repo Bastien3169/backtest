@@ -1,5 +1,5 @@
 """
-pages/4_🔥_Optimisation.py
+pages/1_🔥_Optimisation.py
 Optimisation par grille : teste toutes les combinaisons TP x SL sur PLUSIEURS
 périodes à la fois, et identifie les réglages robustes.
 
