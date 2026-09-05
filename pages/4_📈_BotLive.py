@@ -1,5 +1,5 @@
 """
-pages/3_📈_BotLive.py
+pages/4_📈_BotLive.py
 Monitoring et configuration du bot de trading.
 """
 
@@ -78,6 +78,158 @@ def get_hl_client():
     """Retourne un HyperliquidClient pour le bon compte (long ou short)."""
     from src.utils.hyperliquid_client import HyperliquidClient
     return HyperliquidClient(side=bot_side)
+
+
+def saisie_tp_sl(prefixe: str, notional: float, prix_actuel: float, is_short: bool,
+                 tp_defaut: float = 5.0, sl_defaut: float = 2.5,
+                 tp_max: float = 100.0, sl_max: float = 50.0,
+                 libelle_tp: str = "Take Profit", libelle_sl: str = "Stop Loss") -> dict:
+    """Saisie du TP et du SL, en % de variation OU en prix de déclenchement.
+
+    Mode « % »     : « je coupe à −2,5 % » — la référence suit le prix d'entrée.
+    Mode « Prix $ » : « je coupe quand BTC touche 75 000 » — niveau absolu, celui
+                      qu'on lit sur un graphique.
+
+    Dans les deux cas la perte et le gain en dollars sont affichés : c'est la
+    seule façon de voir ce qu'un niveau représente vraiment sur cette taille de
+    position.
+
+    Retourne un dict :
+        tp_pct, sl_pct : toujours renseignés (0 = désactivé)
+        tp_px,  sl_px  : le niveau saisi en mode Prix, None en mode %
+        ok             : False si un niveau saisi est du mauvais côté du prix
+        mode           : "%" ou "prix"
+
+    Pourquoi les deux : un ordre HL a besoin d'un prix, et le bot automatique a
+    besoin d'un pourcentage. Un prix figé dans bot_state.json serait faux dès la
+    deuxième entrée — le bot rentre à un prix différent à chaque fois. En mode
+    Prix, le pourcentage stocké est donc l'équivalent calculé sur le prix du
+    moment, et l'ordre posé maintenant utilise le prix exact, lui.
+    """
+    prix_ok = bool(prix_actuel) and float(prix_actuel) > 0
+    notio_ok = bool(notional) and float(notional) > 0
+
+    mode = st.radio(
+        "Exprimer le TP / SL en",
+        ["%", "Prix ($)"],
+        horizontal=True,
+        index=0,
+        key=prefixe + "_mode_tpsl",
+        help="% = variation depuis le prix d'entrée. "
+             "Prix = niveau absolu de déclenchement, celui qu'on lit sur le graphe.",
+    )
+
+    if mode == "Prix ($)" and not prix_ok:
+        st.warning("Prix de l'actif indisponible — saisie en % uniquement.")
+        mode = "%"
+
+    c_tp, c_sl = st.columns(2)
+
+    # ── Mode pourcentage ───────────────────────────────────────────────────
+    if mode == "%":
+        with c_tp:
+            tp_pct = st.number_input(libelle_tp + " (%)", 0.0, tp_max,
+                                     tp_defaut, 0.5, key=prefixe + "_tp_pct")
+        with c_sl:
+            sl_pct = st.number_input(libelle_sl + " (%)", 0.0, sl_max,
+                                     sl_defaut, 0.5, key=prefixe + "_sl_pct")
+        _legende_tp_sl(notional, prix_actuel, is_short, tp_pct, sl_pct,
+                       None, None, notio_ok, prix_ok)
+        return {"tp_pct": tp_pct, "sl_pct": sl_pct,
+                "tp_px": None, "sl_px": None, "ok": True, "mode": "%"}
+
+    # ── Mode prix de déclenchement ─────────────────────────────────────────
+    prix_actuel = float(prix_actuel)
+    # Pas et précision d'affichage calés sur l'ordre de grandeur du prix :
+    # 1 $ sur BTC à 110 000, 0,01 $ sur HYPE à 41.
+    if prix_actuel >= 1000:
+        pas, fmt = 100.0, "%.2f"
+    elif prix_actuel >= 10:
+        pas, fmt = 0.5, "%.4f"
+    elif prix_actuel >= 0.1:
+        pas, fmt = 0.01, "%.5f"
+    else:
+        pas, fmt = 0.0001, "%.8f"
+
+    signe_tp = -1 if is_short else 1
+    with c_tp:
+        tp_px = st.number_input(
+            libelle_tp + " — prix ($)", min_value=0.0,
+            value=round(prix_actuel * (1 + signe_tp * tp_defaut / 100), 8),
+            step=pas, format=fmt, key=prefixe + "_tp_px",
+        )
+    with c_sl:
+        sl_px = st.number_input(
+            libelle_sl + " — prix ($)", min_value=0.0,
+            value=round(prix_actuel * (1 - signe_tp * sl_defaut / 100), 8),
+            step=pas, format=fmt, key=prefixe + "_sl_px",
+        )
+
+    tp_px = float(tp_px) or None
+    sl_px = float(sl_px) or None
+
+    # ── Garde-fou : un niveau du mauvais côté est un ordre qui part au quart
+    # de tour. Un TP sous le prix sur un LONG se déclenche instantanément, un
+    # SL au-dessus du prix ferme la position à l'ouverture. Typo classique :
+    # 750000 au lieu de 75000.
+    sens = "SHORT" if is_short else "LONG"
+    erreurs = []
+    if tp_px:
+        if (is_short and tp_px >= prix_actuel) or (not is_short and tp_px <= prix_actuel):
+            erreurs.append(
+                libelle_tp + " à " + format(tp_px, ".4f") + " : sur un " + sens
+                + " il doit être " + ("SOUS" if is_short else "AU-DESSUS")
+                + " du prix actuel (" + format(prix_actuel, ".4f") + ")"
+            )
+    if sl_px:
+        if (is_short and sl_px <= prix_actuel) or (not is_short and sl_px >= prix_actuel):
+            erreurs.append(
+                libelle_sl + " à " + format(sl_px, ".4f") + " : sur un " + sens
+                + " il doit être " + ("AU-DESSUS" if is_short else "SOUS")
+                + " du prix actuel (" + format(prix_actuel, ".4f") + ")"
+            )
+
+    # Équivalent en % sur le prix du moment — c'est ce qui sera stocké.
+    tp_pct = abs(tp_px - prix_actuel) / prix_actuel * 100 if tp_px else 0.0
+    sl_pct = abs(sl_px - prix_actuel) / prix_actuel * 100 if sl_px else 0.0
+
+    if erreurs:
+        for e in erreurs:
+            st.error("⛔ " + e)
+        return {"tp_pct": tp_pct, "sl_pct": sl_pct,
+                "tp_px": tp_px, "sl_px": sl_px, "ok": False, "mode": "prix"}
+
+    _legende_tp_sl(notional, prix_actuel, is_short, tp_pct, sl_pct,
+                   tp_px, sl_px, notio_ok, prix_ok)
+    return {"tp_pct": tp_pct, "sl_pct": sl_pct,
+            "tp_px": tp_px, "sl_px": sl_px, "ok": True, "mode": "prix"}
+
+
+def _legende_tp_sl(notional, prix_actuel, is_short, tp_pct, sl_pct,
+                   tp_px, sl_px, notio_ok, prix_ok):
+    """Ligne de résumé : niveau, écart en %, et surtout gain/perte en dollars."""
+    if not notio_ok:
+        return
+    notional = float(notional)
+    signe = -1 if is_short else 1
+
+    def bloc(libelle, pct, px, sens_signe):
+        if not pct:
+            return "aucun " + libelle
+        if px is None and prix_ok:
+            px = float(prix_actuel) * (1 + sens_signe * pct / 100)
+        montant = notional * pct / 100
+        txt = libelle + " " + format(pct, ".2f") + " %"
+        if px:
+            txt += " (" + format(px, ".4f") + " $)"
+        txt += " → " + ("+" if sens_signe * signe > 0 else "−") + format(montant, ".2f") + " $"
+        return txt
+
+    st.caption(
+        "Sur " + format(notional, ".2f") + " $ de position : "
+        + bloc("TP", tp_pct, tp_px, signe) + "  ·  "
+        + bloc("SL", sl_pct, sl_px, -signe)
+    )
 
 def _resync_json_depuis_hl(symbole: str):
     """Aligne state['position'] du bot sur la réalité HL pour ce symbole.
@@ -334,13 +486,35 @@ with cfg2:
             f"Solde HL : **{solde_hl:.2f} USDC** — "
             f"{solde_hl * size_pct / 100:.2f} USDC par trade"
         )
-        st.caption(f"→ Notional : {notional:.2f} USDC (x{leverage})")
+        st.caption(f"→ Valeur de la position : {notional:.2f} USDC "
+                   f"({notional/leverage:.2f} de marge × {leverage})")
     else:
         st.caption("Solde réel chargé depuis Binance testnet")
 
 with cfg3:
     if timing_mode == "Heure fixe UTC":
         st.caption("🇫🇷 00:01 UTC = 01h01 hiver / 02h01 été")
+
+# Solde Hyperliquid lu UNE SEULE FOIS pour toute la page : sert à convertir un
+# TP/SL saisi en USDC (section 2) et à dimensionner la prise de position
+# manuelle (section 3).
+_solde_hl = 0.0
+_mids_hl  = {}
+if is_mainnet:
+    try:
+        _cli_page = get_hl_client()
+        _solde_hl = _cli_page.get_balance()
+        # allMids renvoie tout l'univers d'un coup : un seul appel sert au TP/SL
+        # en prix de la section 2 ET à toutes les positions ouvertes plus bas.
+        _mids_hl  = _cli_page.get_all_mids()
+    except Exception:
+        _solde_hl = 0.0
+        _mids_hl  = {}
+
+# Taille de position visée = marge engagée × levier. C'est la valeur sur
+# laquelle se calculent le gain et la perte en dollars.
+_notional_ref = _solde_hl * (size_pct / 100) * (leverage if is_mainnet else 1)
+_prix_ref     = _mids_hl.get(hl_name)
 
 st.divider()
 
@@ -353,13 +527,18 @@ st.write("")
 with st.container(border=True):
     st.markdown(f"#### {'🔴 Indicateurs de vente' if not is_short else '🟢 Indicateurs de sortie short'}")
     st.caption("Vente déclenchée si **TP/SL atteint OU indicateur de sortie actif** — laisser vide = hold")
-    _tp_col, _sl_col = st.columns(2)
-    with _tp_col:
-        tp_pct = st.number_input("Take Profit (%)", 0.0, 100.0, 5.0, 0.5, key="bot_tp")
-        tp_pct = tp_pct if tp_pct > 0 else None
-    with _sl_col:
-        sl_pct = st.number_input("Stop Loss (%)", 0.0, 50.0, 2.5, 0.5, key="bot_sl")
-        sl_pct = sl_pct if sl_pct > 0 else None
+    _tpsl = saisie_tp_sl("bot", _notional_ref, _prix_ref, is_short)
+    tp_pct = _tpsl["tp_pct"] if _tpsl["tp_pct"] > 0 else None
+    sl_pct = _tpsl["sl_pct"] if _tpsl["sl_pct"] > 0 else None
+    if _tpsl["mode"] == "prix":
+        st.caption(
+            "ℹ️ L'ordre posé maintenant utilise les prix exacts saisis. Le bot "
+            "automatique, lui, ne peut stocker qu'un pourcentage — il rejouera "
+            "la stratégie à un prix d'entrée différent à chaque trade, un niveau "
+            "figé n'y voudrait plus rien dire. Équivalent enregistré : TP "
+            + format(_tpsl["tp_pct"], ".2f") + " % / SL "
+            + format(_tpsl["sl_pct"], ".2f") + " %."
+        )
     ind_exit = render_indicator_bloc("sell" if not is_short else "buy", "bot_exit")
 
 st.divider()
@@ -472,17 +651,14 @@ if is_mainnet:
             "ouvertes ci-dessous reste utilisable."
         )
 
-    try:
-        _solde_prise = get_hl_client().get_balance()
-    except Exception:
-        _solde_prise = 0.0
+    _solde_prise    = _solde_hl          # déjà lu avant la section 2
     _marge_prise    = _solde_prise * (size_pct / 100)
     _notional_prise = _marge_prise * leverage
 
     st.caption(
         "Entrée au marché sur **" + _sym_prise + "** en **" + _sens_prise + "** — "
         + format(_marge_prise, ".2f") + " USDC de marge × " + str(leverage)
-        + " = " + format(_notional_prise, ".2f") + " USDC de notional · "
+        + " = " + format(_notional_prise, ".2f") + " USDC de position · "
         + (("TP " + format(tp_pct, ".1f") + "%") if tp_pct else "aucun TP")
         + " / "
         + (("SL " + format(sl_pct, ".1f") + "%") if sl_pct else "aucun SL")
@@ -494,9 +670,15 @@ if is_mainnet:
             "SANS protection automatique sur Hyperliquid."
         )
 
+    if not _tpsl["ok"]:
+        st.error(
+            "Corrige le niveau de TP ou de SL signalé en section 2 avant "
+            "d'ouvrir la position."
+        )
+
     if st.button("🎯 Prendre la position " + _sens_prise + " " + str(_sym_prise),
                  type="primary", key="btn_prise_position",
-                 disabled=_hl_indispo):
+                 disabled=_hl_indispo or not _tpsl["ok"]):
         try:
             _cli_p = get_hl_client()
 
@@ -561,10 +743,18 @@ if is_mainnet:
                     # TP/SL natifs sur la quantité ouverte
                     _tp_p = None
                     _sl_p = None
-                    if tp_pct:
+                    # Un niveau saisi en prix est posé TEL QUEL : c'est le prix
+                    # que l'utilisateur lit sur son graphe, il ne doit pas être
+                    # déplacé par le slippage de l'entrée. En mode %, le prix se
+                    # calcule sur le fill réel.
+                    if _tpsl["tp_px"]:
+                        _tp_p = _tpsl["tp_px"]
+                    elif tp_pct:
                         _tp_p = (_fill_p * (1 - tp_pct / 100) if is_short
                                  else _fill_p * (1 + tp_pct / 100))
-                    if sl_pct:
+                    if _tpsl["sl_px"]:
+                        _sl_p = _tpsl["sl_px"]
+                    elif sl_pct:
                         _sl_p = (_fill_p * (1 + sl_pct / 100) if is_short
                                  else _fill_p * (1 - sl_pct / 100))
 
@@ -763,7 +953,7 @@ if is_mainnet:
                     _val_p = st.slider("Part à fermer (%)", 1, 99, 50, key="pct_part_" + _sym)
                 else:
                     _val_p = st.number_input(
-                        "Montant à fermer (USDC de notional)",
+                        "Montant à fermer (USDC de position)",
                         min_value=1.0, value=float(max(10.0, _p["size_usdt"] / 2)),
                         step=10.0, key="usd_part_" + _sym,
                     )
@@ -819,18 +1009,23 @@ if is_mainnet:
                     "précédentes ne sont pas touchés (comportement natif HL)."
                 )
                 _notional_add = st.number_input(
-                    "Montant à ajouter (USDC de notional)",
+                    "Montant à ajouter (USDC de position)",
                     min_value=10.0, value=100.0, step=10.0, key="add_usd_" + _sym,
                 )
-                _ca, _cb = st.columns(2)
-                _tp_add = _ca.number_input(
-                    "TP sur cette tranche (%)", 0.0, 100.0, 5.0, 0.5, key="add_tp_" + _sym
+                _tpsl_add = saisie_tp_sl(
+                    "add_" + _sym, float(_notional_add),
+                    _mids_hl.get(_sym) or _p["entry_price"], _p["is_short"],
+                    libelle_tp="TP sur cette tranche",
+                    libelle_sl="SL sur cette tranche",
                 )
-                _sl_add = _cb.number_input(
-                    "SL sur cette tranche (%)", 0.0, 50.0, 2.5, 0.5, key="add_sl_" + _sym
-                )
+                _tp_add = _tpsl_add["tp_pct"]
+                _sl_add = _tpsl_add["sl_pct"]
 
-                if st.button("➕ Renforcer " + _sym, key="btn_add_" + _sym):
+                if not _tpsl_add["ok"]:
+                    st.error("Corrige le niveau de TP ou de SL avant de renforcer.")
+
+                if st.button("➕ Renforcer " + _sym, key="btn_add_" + _sym,
+                             disabled=not _tpsl_add["ok"]):
                     try:
                         _cli  = get_hl_client()
                         _vrai = _cli.get_position(_sym)
@@ -852,12 +1047,18 @@ if is_mainnet:
                                 )
                                 _qte_add = _cli.round_size(_sym, float(_notional_add) / float(_fill))
 
+                                # Niveau saisi en prix → posé tel quel. Sinon,
+                                # calculé sur le prix de remplissage réel.
                                 _tp_prix = None
                                 _sl_prix = None
-                                if _tp_add > 0:
+                                if _tpsl_add["tp_px"]:
+                                    _tp_prix = _tpsl_add["tp_px"]
+                                elif _tp_add > 0:
                                     _tp_prix = (_fill * (1 - _tp_add / 100) if _short
                                                 else _fill * (1 + _tp_add / 100))
-                                if _sl_add > 0:
+                                if _tpsl_add["sl_px"]:
+                                    _sl_prix = _tpsl_add["sl_px"]
+                                elif _sl_add > 0:
                                     _sl_prix = (_fill * (1 + _sl_add / 100) if _short
                                                 else _fill * (1 - _sl_add / 100))
 

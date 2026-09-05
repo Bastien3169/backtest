@@ -186,6 +186,28 @@ class HyperliquidClient:
         except Exception:
             return None
 
+    def get_all_mids(self) -> dict:
+        """Prix mid de TOUS les actifs, en un seul appel.
+
+        allMids renvoie déjà tout l'univers : quand une page a besoin du prix de
+        plusieurs actifs (liste des positions ouvertes), un seul appel suffit au
+        lieu d'un get_price par symbole.
+        """
+        try:
+            mids = self._post_info({"type": "allMids"})
+            sortie = {}
+            for nom, px in mids.items():
+                try:
+                    valeur = float(px)
+                except (TypeError, ValueError):
+                    continue
+                if valeur > 0:
+                    sortie[nom] = valeur
+            return sortie
+        except Exception as e:
+            print(f"Erreur get_all_mids : {e}")
+            return {}
+
     # ── Solde ─────────────────────────────────────────────────────────────
 
     def get_balance(self, asset: str = "USDC") -> float:

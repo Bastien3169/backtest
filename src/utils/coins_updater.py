@@ -34,10 +34,9 @@ COINGECKO_MARKETS_URL = (
     "?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false"
 )
 
-YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
-# Yahoo renvoie 403 sans User-Agent navigateur.
-_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"}
+# La résolution des tickers Yahoo passe par yfinance (yf.Lookup / yf.Search) :
+# les endpoints de recherche de Yahoo exigent un cookie de session et un
+# « crumb » que yfinance gère seul. Un appel HTTP direct se fait refuser.
 
 # Indices boursiers — hors HL, conservés tels quels pour le backtest.
 INDICES = [
@@ -109,50 +108,105 @@ def test_yfinance_ticker(ticker: str) -> bool:
         return False
 
 
-def _yahoo_search_crypto(symbole: str) -> str | None:
-    """Cherche chez Yahoo le ticker crypto correspondant à un symbole.
+def _candidat_valide(symbole: str, ticker: str) -> bool:
+    """Le ticker Yahoo correspond-il bien à ce symbole ?
 
-    Attrape les tickers suffixés type "HYPE32196-USD" que la forme
-    f"{symbole}-USD" ne peut pas deviner.
+    Yahoo suffixe d'un identifiant numérique les symboles crypto en collision :
+    SUI → SUI20947-USD, UNI → UNI7083-USD, APT → APT21794-USD. On accepte donc
+    le symbole nu ou le symbole suivi de chiffres, et rien d'autre —
+    « HYPERION-USD » ne doit pas passer pour « HYPE ».
+    """
+    ticker = (ticker or "").upper()
+    if not ticker.endswith("-USD"):
+        return False
+    base = ticker[:-4]
+    return base == symbole or (base.startswith(symbole) and base[len(symbole):].isdigit())
+
+
+def _yahoo_lookup(symbole: str, requete: str) -> str | None:
+    """Résolution via l'API lookup de Yahoo, à travers yfinance.
+
+    IMPORTANT : passer par yfinance et pas par un requests.get direct. Yahoo
+    exige désormais un cookie de session et un « crumb » sur ses endpoints de
+    recherche ; yfinance les gère, un appel HTTP nu se fait refuser en masse.
+    C'est ce qui faisait échouer la résolution de SUI, APT, UNI, POL, TAO,
+    IMX... — des actifs pourtant tous présents chez Yahoo.
     """
     try:
-        resp = requests.get(
-            YAHOO_SEARCH_URL,
-            params={"q": symbole, "quotesCount": 15, "newsCount": 0},
-            headers=_UA,
-            timeout=15,
-        )
-        resp.raise_for_status()
-        quotes = resp.json().get("quotes", [])
+        df = yf.Lookup(requete).get_cryptocurrency(count=50)
     except Exception as e:
-        print(f"Recherche Yahoo échouée pour {symbole} ({e})")
+        print(f"Lookup Yahoo indisponible pour {symbole} ({e})")
         return None
 
-    for q in quotes:
-        sym = (q.get("symbol") or "").upper()
-        if q.get("quoteType") != "CRYPTOCURRENCY" or not sym.endswith("-USD"):
-            continue
-        base = sym[:-4]                       # "HYPE32196"
-        # Le symbole cherché doit être le préfixe, le reste uniquement des
-        # chiffres : HYPE32196 ✔ / HYPERION ✘
-        if base == symbole or (base.startswith(symbole) and base[len(symbole):].isdigit()):
-            return sym
+    if df is None or len(df) == 0:
+        return None
+
+    for ticker in df.index.astype(str):
+        if _candidat_valide(symbole, ticker):
+            return ticker.upper()
     return None
 
 
-def resolve_yahoo_ticker(hl_name: str) -> str | None:
-    """Ticker Yahoo utilisable pour cet actif HL, ou None."""
+def _yahoo_search(symbole: str, requete: str) -> str | None:
+    """Repli : l'endpoint de recherche, toujours via la session yfinance."""
+    try:
+        quotes = yf.Search(requete, max_results=25, news_count=0).quotes
+    except Exception as e:
+        print(f"Search Yahoo indisponible pour {symbole} ({e})")
+        return None
+
+    for q in quotes or []:
+        if q.get("quoteType") != "CRYPTOCURRENCY":
+            continue
+        if _candidat_valide(symbole, q.get("symbol", "")):
+            return q["symbol"].upper()
+    return None
+
+
+def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "") -> tuple[str | None, str]:
+    """Ticker Yahoo utilisable pour cet actif HL.
+
+    On RASSEMBLE tous les candidats avant d'en tester un seul. Une première
+    version s'arrêtait au premier ticker trouvé : GALA-USD existe chez Yahoo
+    mais est mort, ce qui empêchait de découvrir GALA7080-USD, le vivant.
+
+    On interroge aussi Yahoo avec le NOM du token, pas seulement son symbole :
+    « POL » ou « S » ramènent des dizaines de résultats sans intérêt, alors que
+    « Polygon Ecosystem Token » ou « Sonic » tombent juste. Le filtre
+    `_candidat_valide` reste appliqué, donc chercher par nom ne peut pas faire
+    entrer un ticker qui ne correspond pas au symbole.
+
+    Returns:
+        (ticker, motif) — ticker None si rien trouvé, motif expliquant pourquoi
+        pour que la page de mise à jour affiche autre chose qu'une liste muette.
+    """
     symbole = _base_symbol(hl_name)
 
     direct = f"{symbole}-USD"
     if test_yfinance_ticker(direct):
-        return direct
+        return direct, "direct"
 
-    trouve = _yahoo_search_crypto(symbole)
-    if trouve and test_yfinance_ticker(trouve):
-        return trouve
+    requetes = [symbole]
+    if nom_lisible and nom_lisible.upper() != symbole:
+        requetes.append(nom_lisible)
 
-    return None
+    candidats = []
+    for requete in requetes:
+        for resolveur in (_yahoo_lookup, _yahoo_search):
+            trouve = resolveur(symbole, requete)
+            if trouve and trouve not in candidats:
+                candidats.append(trouve)
+
+    for candidat in candidats:
+        if candidat != direct and test_yfinance_ticker(candidat):
+            return candidat, "résolu"
+
+    if candidats:
+        # Coté chez Yahoo, mais sans historique exploitable : trop récent ou
+        # trop peu suivi pour servir de base à un backtest.
+        return None, "historique trop court (" + ", ".join(candidats) + ")"
+
+    return None, "aucun ticker Yahoo"
 
 
 # ---------------------------------------------------------------------------
@@ -181,9 +235,9 @@ def update_coins(progress_cb=None) -> tuple[list[dict], list[str]]:
         if symbole in vus:
             continue
 
-        ticker = resolve_yahoo_ticker(hl_name)
+        ticker, motif = resolve_yahoo_ticker(hl_name, noms.get(symbole, ""))
         if not ticker:
-            skipped.append(hl_name)
+            skipped.append(hl_name + " (" + motif + ")")
             continue
 
         vus.add(symbole)
