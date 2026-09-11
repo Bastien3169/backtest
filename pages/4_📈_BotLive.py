@@ -11,10 +11,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import re
+import html as _html
 import streamlit as st
 import pandas as pd
 import extra_streamlit_components as stx
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_ROOT, ".env"))
@@ -73,6 +75,57 @@ reset      = _bs_module.reset
 
 # Détection du side depuis le nom du JSON — utilisé partout dans la page
 bot_side = "short" if "short" in _selected_json.lower() else ("free" if "free" in _selected_json.lower() else "long")
+
+# ---------------------------------------------------------------------------
+# Bandeau d'incidents — remonte en haut de page les erreurs récentes du log
+# ---------------------------------------------------------------------------
+# Sans ça, une erreur est noyée dans l'expander de log en bas de page, en petit
+# gris, au milieu des "💤 Prochain check dans 23h 59min". Un ordre refusé peut
+# passer inaperçu plusieurs jours (cas réel : refus du 09/09 vu seulement le 11).
+MARQUEURS_CRITIQUES = ("❌", "🚨")
+MARQUEURS_ALERTE    = ("⚠️",)
+FENETRE_INCIDENTS_H = 24      # on n'affiche que les incidents de moins de 24 h
+MAX_INCIDENTS       = 3       # nombre de lignes remontées dans le bandeau
+
+
+def _horodatage_log(ligne: str):
+    """Extrait le datetime d'une ligne '[YYYY-MM-DD HH:MM:SS] ...', sinon None."""
+    m = re.match(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", ligne)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _est_incident(ligne: str) -> bool:
+    return any(m in ligne for m in MARQUEURS_CRITIQUES + MARQUEURS_ALERTE)
+
+
+def _incidents_recents(lignes, fenetre_h=FENETRE_INCIDENTS_H, maxi=MAX_INCIDENTS):
+    """Incidents du log datant de moins de fenetre_h heures, du plus récent au plus ancien."""
+    limite   = datetime.now() - timedelta(hours=fenetre_h)
+    trouves  = []
+    for ligne in reversed(lignes or []):
+        if not _est_incident(ligne):
+            continue
+        ts = _horodatage_log(ligne)
+        if ts is not None and ts < limite:
+            break            # log chronologique : tout ce qui suit est plus ancien
+        trouves.append(ligne)
+        if len(trouves) >= maxi:
+            break
+    return trouves
+
+
+_incidents = _incidents_recents(get_state().get("log", []))
+if _incidents:
+    _critique = any(m in l for l in _incidents for m in MARQUEURS_CRITIQUES)
+    _titre    = ("🚨 **Incident(s) du bot dans les dernières 24 h**" if _critique
+                 else "⚠️ **Avertissement(s) du bot dans les dernières 24 h**")
+    _corps    = "\n".join(f"- `{l}`" for l in _incidents)
+    (st.error if _critique else st.warning)(f"{_titre}\n\n{_corps}")
 
 def get_hl_client():
     """Retourne un HyperliquidClient pour le bon compte (long ou short)."""
@@ -1366,8 +1419,35 @@ else:
         st.info("Aucun trade enregistré")
 
 # Log du bot
+# Les lignes d'incident (❌ 🚨 ⚠️) sont colorées : en st.caption gris uniforme,
+# une erreur avait exactement la même apparence qu'un "💤 Prochain check".
+COULEUR_CRITIQUE = "#EF4444"   # rouge
+COULEUR_ALERTE   = "#F59E0B"   # orange
+COULEUR_NORMALE  = "#9CA3AF"   # gris, équivalent st.caption
+
 log_lines = state.get("log", [])
 if log_lines:
     with st.expander("📋 Log du bot", expanded=True):
-        for line in reversed(log_lines[-30:]):
-            st.caption(line)
+        seulement_incidents = st.checkbox(
+            "Afficher uniquement les incidents (❌ 🚨 ⚠️)",
+            value=False,
+            key="log_filtre_incidents",
+        )
+        lignes = [l for l in log_lines if _est_incident(l)] if seulement_incidents else log_lines
+        lignes = lignes[-50:]
+
+        if not lignes:
+            st.caption("Aucun incident dans le log — tout va bien.")
+        for line in reversed(lignes):
+            if any(m in line for m in MARQUEURS_CRITIQUES):
+                couleur, graisse = COULEUR_CRITIQUE, 600
+            elif any(m in line for m in MARQUEURS_ALERTE):
+                couleur, graisse = COULEUR_ALERTE, 500
+            else:
+                couleur, graisse = COULEUR_NORMALE, 400
+            st.markdown(
+                f"<div style='color:{couleur}; font-weight:{graisse}; font-size:0.8rem; "
+                f"line-height:1.5; font-family:ui-monospace,monospace;'>"
+                f"{_html.escape(line)}</div>",
+                unsafe_allow_html=True,
+            )
