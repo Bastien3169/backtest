@@ -58,6 +58,25 @@ FIX 4 — Pas de plafond sur le levier.
   directement en production.
   Maintenant : le levier est plafonné à MAX_LEVERAGE (25 par défaut) avec
   un log d'avertissement si la valeur configurée dépasse ce plafond.
+
+FIX 5 — Taille de position demandée à 100 % du solde, sans place pour les frais.
+  Avant : `size_usd = balance * (size_pct / 100)`. Avec size_pct = 100, le
+  notional demandé valait exactement le solde disponible. Hyperliquid prélevant
+  les frais taker EN PLUS de la marge, l'ordre partait et revenait refusé pour
+  marge insuffisante — de façon intermittente, selon le sens de l'arrondi de la
+  quantité (voir aussi round_size() dans hyperliquid_client.py).
+  Maintenant : un coussin MARGE_SECURITE (0,5 %) est appliqué à la marge.
+
+FIX 6 — Un ordre d'entrée refusé faisait perdre le signal de la journée.
+  Avant : quel que soit le résultat de l'ordre, `last_entry_date` était marqué
+  à la date du jour, puis le bot dormait jusqu'au cycle suivant (24 h en 1d).
+  Un refus temporaire de HL coûtait donc le trade entier, sans aucune relance.
+  De plus le log affichait le message d'exception interne et non le motif
+  renvoyé par HL, ce qui rendait le diagnostic impossible.
+  Maintenant : sur refus, le motif HL est loggé, la journée n'est PAS marquée
+  traitée, et le bot repasse au bout de RETRY_ENTREE_SEC (5 min), jusqu'à
+  MAX_TENTATIVES_ENTREE (3) tentatives, après quoi le signal du jour est
+  abandonné normalement.
 ---------------------------------------------------------------------------
 """
 
@@ -112,6 +131,23 @@ log        = _bs.log
 # FIX 4 — Plafond de sécurité sur le levier
 # ---------------------------------------------------------------------------
 MAX_LEVERAGE = 25
+
+# ---------------------------------------------------------------------------
+# FIX 5 — Marge de sécurité sur la taille de position
+# ---------------------------------------------------------------------------
+# Hyperliquid prélève les frais taker (~0,045 %) EN PLUS de la marge immobilisée.
+# Demander 100 % du solde en notional ne laisse aucune place pour ces frais :
+# l'ordre part et HL le refuse pour marge insuffisante. On garde donc 0,5 % de
+# coussin. Avec size_pct = 100, on utilise 99,5 % du solde au lieu de 100 %.
+MARGE_SECURITE = 0.995
+
+# ---------------------------------------------------------------------------
+# FIX 6 — Nouvelle tentative après un ordre d'entrée refusé
+# ---------------------------------------------------------------------------
+# Sans ça, un ordre refusé faisait perdre le signal du jour : le bot marquait
+# la journée comme traitée (last_entry_date) puis dormait jusqu'au lendemain.
+RETRY_ENTREE_SEC      = 300   # 5 min avant de retenter
+MAX_TENTATIVES_ENTREE = 3     # au-delà, on abandonne le signal du jour
 
 # ---------------------------------------------------------------------------
 # Timing — synchronisation sur les heures rondes UTC
@@ -170,6 +206,8 @@ def run():
     log(f"{BOT_PREFIX} 💰 Bot MAINNET Hyperliquid démarré — ⚠️ ARGENT RÉEL", max_logs=5000)
     first_run = True
     client    = None   # connexion différée
+    # FIX 6 — suivi des tentatives d'entrée ratées, remis à zéro chaque jour
+    tentatives_jour = {"date": None, "n": 0}
 
     while True:
         try:
@@ -400,9 +438,14 @@ def run():
             # first_run = True → on ne prend pas de position au premier cycle
             # already_checked = True → signal déjà vu aujourd'hui, on attend demain
             # kill_switch_active = True → perte max de session atteinte, plus de nouvelles entrées (FIX 3)
+            # FIX 6 — vrai si l'ordre d'entrée de ce cycle a été refusé par HL
+            entree_echouee = False
+
             if pos is None and entry_signal and not first_run and not already_checked and not kill_switch_active:
                 balance  = client.get_balance()
-                size_usd = balance * (size_pct / 100)
+                # FIX 5 — coussin pour les frais : sans lui, size_pct = 100
+                # demande exactement tout le solde et HL refuse l'ordre.
+                size_usd = balance * (size_pct / 100) * MARGE_SECURITE
 
                 # Notional = marge × levier
                 notional = size_usd * leverage
@@ -480,7 +523,22 @@ def run():
                                 state["position"]["protected"] = True
                                 log(f"{BOT_PREFIX} ⚠️ TP natif échoué mais SL OK — position gardée sans TP automatique", max_logs=5000)
                     else:
-                        log(f"{BOT_PREFIX} ❌ Ordre échoué : {res}", max_logs=5000)
+                        # FIX 6 — on remonte le motif renvoyé par HL, pas un crash interne
+                        motif = (res or {}).get("error") or (res or {}).get("message") or res
+                        entree_echouee = True
+                        if tentatives_jour["date"] != today_utc:
+                            tentatives_jour["date"], tentatives_jour["n"] = today_utc, 0
+                        tentatives_jour["n"] += 1
+                        reste = MAX_TENTATIVES_ENTREE - tentatives_jour["n"]
+                        if reste > 0:
+                            log(f"{BOT_PREFIX} ❌ Ordre refusé par HL : {motif} — "
+                                f"nouvelle tentative dans {RETRY_ENTREE_SEC // 60} min "
+                                f"({reste} restante(s))", max_logs=5000)
+                        else:
+                            entree_echouee = False   # on abandonne le signal du jour
+                            log(f"{BOT_PREFIX} ❌ Ordre refusé par HL : {motif} — "
+                                f"{MAX_TENTATIVES_ENTREE} tentatives épuisées, "
+                                f"signal du jour abandonné", max_logs=5000)
 
             # ── 6. Sortie ──────────────────────────────────────────────────
             elif pos is not None:
@@ -524,7 +582,9 @@ def run():
 
             # ── Sauvegarder la date du check uniquement si on a vraiment vérifié ─
             # (pas en first_run pour ne pas bloquer le lendemain après un restart)
-            if not first_run:
+            # FIX 6 — un ordre refusé ne doit PAS consommer le signal du jour :
+            # tant qu'il reste des tentatives, on ne marque pas la journée traitée.
+            if not first_run and not entree_echouee:
                 state["last_entry_date"] = today_utc
 
             # ── 7. Log état final + save ───────────────────────────────────
@@ -551,7 +611,12 @@ def run():
             save_state(fresh)
 
             # ── 8. Sleep ───────────────────────────────────────────────────
-            sleep_sec  = next_sleep(timeframe, check_time_utc, interval_min)
+            # FIX 6 — après un refus d'ordre, on repasse dans quelques minutes
+            # au lieu d'attendre le cycle suivant (24 h en 1d).
+            if entree_echouee:
+                sleep_sec = RETRY_ENTREE_SEC
+            else:
+                sleep_sec = next_sleep(timeframe, check_time_utc, interval_min)
             next_check = datetime.now(timezone.utc) + timedelta(seconds=sleep_sec)
             log(f"{BOT_PREFIX} 💤 Prochain check à {next_check.strftime('%H:%M:%S')} UTC "
                 f"(dans {sleep_sec//3600}h {(sleep_sec%3600)//60}min {sleep_sec%60}s)",

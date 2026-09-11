@@ -148,8 +148,57 @@ class HyperliquidClient:
         return 2
 
     def round_size(self, asset: str, size: float) -> float:
-        """Arrondit une quantité au pas autorisé pour cet actif."""
-        return round(float(size), self.sz_decimals(asset))
+        """Arrondit une quantité au pas autorisé pour cet actif, TOUJOURS vers le bas.
+
+        CORRECTIF — l'ancienne version utilisait round(), qui peut arrondir vers
+        le HAUT. Avec size_pct = 100 (notional = 100 % du solde), la quantité
+        arrondie vers le haut demandait plus de marge que le solde disponible et
+        Hyperliquid refusait l'ordre. Exemple réel du 11/09/2026 :
+            99.43 USDC / 76 534 $ = 0.00129917 → round(,5) = 0.00130 → 99.49 $
+            demandés pour 99.43 $ disponibles → refus.
+        Le plancher garantit qu'on ne demande jamais plus que ce qu'on peut payer.
+        On perd au pire un pas de quantité (ici 0.00001 BTC ≈ 0.77 $).
+        """
+        decimales = self.sz_decimals(asset)
+        facteur   = 10 ** decimales
+        # epsilon : évite qu'un 0.0013 stocké en 0.001299999999 tombe un pas plus bas
+        return math.floor(float(size) * facteur + 1e-9) / facteur
+
+    @staticmethod
+    def _lire_reponse_ordre(result) -> tuple[bool, str | None]:
+        """Lit la réponse d'un ordre HL et en extrait (succès, motif d'erreur).
+
+        CORRECTIF — Hyperliquid renvoie DEUX formes différentes :
+          • accepté : {"status": "ok",  "response": {"data": {"statuses": [...]}}}
+          • refusé  : {"status": "err", "response": "Insufficient margin to place order."}
+                      ↑ ici 'response' est une STRING, pas un dict.
+        L'ancien code faisait .get("data") directement sur cette string, ce qui
+        levait "'str' object has no attribute 'get'". L'exception était attrapée
+        plus bas et ce message de crash remplaçait le vrai motif du refus — on
+        était donc aveugle sur la raison réelle de l'échec.
+        """
+        if not isinstance(result, dict):
+            return False, f"Réponse HL non exploitable : {result!r}"
+
+        reponse = result.get("response")
+        if isinstance(reponse, str):
+            # Refus explicite de HL — le motif est directement dans la string.
+            return False, reponse
+
+        statuses = []
+        if isinstance(reponse, dict):
+            data = reponse.get("data")
+            if isinstance(data, dict):
+                statuses = data.get("statuses") or []
+
+        erreur = next(
+            (s["error"] for s in statuses if isinstance(s, dict) and "error" in s),
+            None,
+        )
+        ok = result.get("status") == "ok" and erreur is None
+        if not ok and erreur is None:
+            erreur = f"Réponse HL inattendue : {result!r}"
+        return ok, erreur
 
     def round_px(self, asset: str, px: float) -> float:
         """Arrondit un prix aux règles HL (5 chiffres significatifs max,
@@ -291,11 +340,9 @@ class HyperliquidClient:
             result   = self._exchange.order(
                 asset, True, size, limit_px, {"limit": {"tif": "Ioc"}}
             )
-            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-            has_error = any("error" in s for s in statuses)
-            ok = result.get("status") == "ok" and not has_error
+            ok, erreur = self._lire_reponse_ordre(result)
             return {"ok": ok, "data": result, "fill_price": price,
-                    "error": statuses[0].get("error") if has_error else None}
+                    "error": erreur, "message": erreur or ""}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -319,11 +366,9 @@ class HyperliquidClient:
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
             )
             # Vérifier qu'il n'y a pas d'erreur dans les statuses
-            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-            has_error = any("error" in s for s in statuses)
-            ok = result.get("status") == "ok" and not has_error
+            ok, erreur = self._lire_reponse_ordre(result)
             return {"ok": ok, "data": result, "fill_price": price,
-                    "error": statuses[0].get("error") if has_error else None}
+                    "error": erreur, "message": erreur or ""}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -347,11 +392,9 @@ class HyperliquidClient:
                 asset, False, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=False
             )
-            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-            has_error = any("error" in s for s in statuses)
-            ok = result.get("status") == "ok" and not has_error
+            ok, erreur = self._lire_reponse_ordre(result)
             return {"ok": ok, "data": result, "fill_price": price,
-                    "error": statuses[0].get("error") if has_error else None}
+                    "error": erreur, "message": erreur or ""}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
@@ -446,11 +489,13 @@ class HyperliquidClient:
             tp_ok = False
             sl_ok = False
             if "tp" in results:
-                tp_statuses = results["tp"].get("response", {}).get("data", {}).get("statuses", [])
-                tp_ok = results["tp"].get("status") == "ok" and not any("error" in s for s in tp_statuses)
+                tp_ok, tp_err = self._lire_reponse_ordre(results["tp"])
+                if not tp_ok:
+                    print(f"TP natif refusé par HL : {tp_err}")
             if "sl" in results:
-                sl_statuses = results["sl"].get("response", {}).get("data", {}).get("statuses", [])
-                sl_ok = results["sl"].get("status") == "ok" and not any("error" in s for s in sl_statuses)
+                sl_ok, sl_err = self._lire_reponse_ordre(results["sl"])
+                if not sl_ok:
+                    print(f"SL natif refusé par HL : {sl_err}")
 
             return {"ok": True, "tp_ok": tp_ok, "sl_ok": sl_ok, "results": results}
 
@@ -476,11 +521,9 @@ class HyperliquidClient:
                 asset, True, size, limit_px,
                 {"limit": {"tif": "Ioc"}}, reduce_only=True
             )
-            statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-            has_error = any("error" in s for s in statuses)
-            ok = result.get("status") == "ok" and not has_error
+            ok, erreur = self._lire_reponse_ordre(result)
             return {"ok": ok, "data": result, "fill_price": price,
-                    "error": statuses[0].get("error") if has_error else None}
+                    "error": erreur, "message": erreur or ""}
         except Exception as e:
             return {"ok": False, "message": str(e), "fill_price": 0}
 
