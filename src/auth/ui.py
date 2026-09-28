@@ -11,7 +11,6 @@ impossible à forger (contrairement à l'ancien cookie bot_auth="ok").
 """
 
 import os
-import time
 from datetime import datetime, timedelta
 
 import extra_streamlit_components as stx
@@ -43,10 +42,36 @@ def cookie_manager() -> stx.CookieManager:
 
 
 def current_user(cm: stx.CookieManager) -> dict | None:
-    """Utilisateur connecté (ou None). À appeler en haut de app.py à chaque run."""
+    """Utilisateur connecté (ou None). À appeler en haut de app.py à chaque run.
+
+    Gère aussi les écritures de cookie demandées par les callbacks de
+    connexion / déconnexion : elles sont rejouées à chaque run tant que le
+    navigateur ne les a pas appliquées (un run interrompu ne les perd donc pas).
+    """
     _setup_une_fois()
 
-    jeton = st.session_state.get("auth_token") or cm.get(COOKIE)
+    # Déconnexion demandée : effacer le cookie tant qu'il est encore là
+    if st.session_state.get("_cookie_a_supprimer"):
+        if cm.get(COOKIE):
+            cm.delete(COOKIE, key="bt_del")
+        else:
+            st.session_state.pop("_cookie_a_supprimer", None)
+
+    # Connexion réussie : poser le cookie tant que le navigateur ne l'a pas
+    en_attente = st.session_state.get("_cookie_a_poser")
+    if en_attente:
+        jeton_c, expire_le = en_attente
+        if cm.get(COOKIE) == jeton_c:
+            st.session_state.pop("_cookie_a_poser", None)
+        else:
+            # Arguments identiques d'un run à l'autre (expire_le figé au login) :
+            # le composant n'est pas re-déclenché en boucle.
+            cm.set(COOKIE, jeton_c, key="bt_set", expires_at=expire_le,
+                   secure=_HTTPS or None, same_site="strict")
+
+    jeton = st.session_state.get("auth_token")
+    if not jeton and not st.session_state.get("_cookie_a_supprimer"):
+        jeton = cm.get(COOKIE)
     user = U.user_from_token(jeton)
     if user:
         st.session_state["auth_token"] = jeton
@@ -56,11 +81,48 @@ def current_user(cm: stx.CookieManager) -> dict | None:
     return user
 
 
-def _poser_cookie(cm, jeton: str, rester_connecte: bool):
-    heures = U.SESSION_LONGUE_H if rester_connecte else U.SESSION_COURTE_H
-    cm.set(COOKIE, jeton, key="bt_set",
-           expires_at=datetime.now() + timedelta(hours=heures),
-           secure=_HTTPS or None, same_site="strict")
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
+# Les boutons passent par on_click : Streamlit exécute le callback dès réception
+# du clic, AVANT le script. Sans ça, si le composant cookie relance la page au
+# même moment (fréquent au premier chargement, surtout serveur à froid), le run
+# qui portait le clic est interrompu et le clic est perdu : aucun message.
+def _cb_login():
+    ss = st.session_state
+    email, mdp = ss.get("login_email", ""), ss.get("login_mdp", "")
+    if not email or not mdp:
+        ss["_msg_login"] = ("error", "❌ Remplis les deux champs.")
+        return
+    succes, msg, jeton = U.login(email, mdp, ss.get("login_rester", False))
+    if succes:
+        heures = U.SESSION_LONGUE_H if ss.get("login_rester") else U.SESSION_COURTE_H
+        ss["auth_token"] = jeton
+        ss["_cookie_a_poser"] = (jeton, datetime.now() + timedelta(hours=heures))
+        ss.pop("_cookie_a_supprimer", None)
+        ss.pop("_msg_login", None)
+    else:
+        ss["_msg_login"] = ("info" if msg == U.MSG_ATTENTE else "error", msg)
+
+
+def _cb_register():
+    ss = st.session_state
+    if ss.get("reg_mdp") != ss.get("reg_mdp2"):
+        ss["_msg_reg"] = ("error", "❌ Les deux mots de passe ne correspondent pas.")
+        return
+    succes, msg = U.register(ss.get("reg_email", ""), ss.get("reg_mdp", ""))
+    ss["_msg_reg"] = ("success" if succes else "error", msg)
+
+
+def _cb_logout():
+    ss = st.session_state
+    U.logout(ss.get("auth_token"))
+    ss.pop("auth_token", None)
+    ss.pop("_cookie_a_poser", None)
+    ss["user"] = None
+    ss["_cookie_a_supprimer"] = True
+    ss.pop("_msg_login", None)
+    ss.pop("_msg_reg", None)
 
 
 def logout_button(cm: stx.CookieManager):
@@ -72,14 +134,7 @@ def logout_button(cm: stx.CookieManager):
         st.divider()
         badge = "👑 admin" if user["role"] == "admin" else "👤"
         st.caption(f"{badge} {user['email']}")
-        if st.button("Se déconnecter", key="bt_logout", width="stretch"):
-            U.logout(st.session_state.get("auth_token"))
-            st.session_state.pop("auth_token", None)
-            st.session_state["user"] = None
-            if cm.get(COOKIE):
-                cm.delete(COOKIE, key="bt_del")
-            time.sleep(0.5)          # laisser le navigateur effacer le cookie
-            st.rerun()
+        st.button("Se déconnecter", key="bt_logout", width="stretch", on_click=_cb_logout)
 
 
 def require_admin():
@@ -122,46 +177,82 @@ def account_page():
 # ---------------------------------------------------------------------------
 # Page de connexion / inscription (seule page visible sans être connecté)
 # ---------------------------------------------------------------------------
+# Descriptions des pages, affichées sur la page de connexion (même ordre que le menu).
+# Bot Live n'y figure volontairement pas : réservé à l'admin, inutile de l'annoncer.
+PAGES_INFO = [
+    ("📈", "Backtest",
+     "Construis une ou plusieurs stratégies à partir d'indicateurs (RSI, moyennes mobiles, "
+     "MACD, Bollinger) et simule-les sur un actif et une période. Rendement, drawdown et "
+     "points d'achat/vente sont comparés côte à côte."),
+    ("🔥", "Optimisation",
+     "Teste d'un coup toutes les combinaisons de take profit et de stop loss sur plusieurs "
+     "périodes, pour trouver des réglages qui tiennent partout et pas sur une seule période."),
+    ("🧪", "Multi-actifs",
+     "Fige une stratégie et lance-la sur plusieurs cryptos et plusieurs périodes, pour vérifier "
+     "qu'elle ne marche pas uniquement sur l'actif où tu l'as trouvée."),
+    ("📊", "Screening",
+     "Classe les cryptos selon leur volatilité, leur corrélation au BTC, leur bêta, leur volume "
+     "et leur performance, pour choisir sur quoi travailler."),
+]
+
+_ENTETE_HTML = """
+<div style="text-align:center; border:2px solid rgba(128,128,128,.45); border-radius:14px;
+            padding:22px 16px 18px; margin:0 auto 28px; max-width:620px;">
+  <div style="font-size:2.6rem; font-weight:800; letter-spacing:.03em; line-height:1.2;
+              text-decoration:underline; text-decoration-thickness:3px;
+              text-underline-offset:10px;">📈 Backtesting</div>
+  <div style="margin-top:16px; opacity:.75; font-size:1.05rem;">
+    Teste tes stratégies crypto sur l'historique avant d'y mettre un euro.
+  </div>
+</div>
+"""
+
+
+def _afficher_message(cle: str):
+    """Affiche le dernier message d'un formulaire.
+
+    Écrit par les callbacks dans session_state, il survit aux relances de la
+    page et reste affiché jusqu'au prochain envoi du formulaire.
+    """
+    m = st.session_state.get(cle)
+    if m:
+        genre, texte = m
+        {"error": st.error, "success": st.success, "info": st.info}[genre](texte)
+
+
 def login_page():
-    cm = st.session_state["_cookie_manager"]
+    st.markdown(_ENTETE_HTML, unsafe_allow_html=True)
 
-    st.title("🔐 BacktestBot")
-    onglet_co, onglet_insc = st.tabs(["Connexion", "Inscription"])
+    # Formulaire à gauche : sur téléphone les colonnes s'empilent, et la plupart
+    # des visites viennent de gens qui ont déjà un compte.
+    col_form, col_info = st.columns([1, 1.1], gap="large")
 
-    with onglet_co:
-        with st.form("form_login"):
-            email = st.text_input("Email", autocomplete="email")
-            mdp = st.text_input("Mot de passe", type="password", autocomplete="current-password")
-            rester = st.checkbox("Rester connecté 30 jours", value=False)
-            ok = st.form_submit_button("Se connecter", width="stretch")
-        if ok:
-            if not email or not mdp:
-                st.error("❌ Remplis les deux champs.")
-            else:
-                succes, msg, jeton = U.login(email, mdp, rester)
-                if succes:
-                    st.session_state["auth_token"] = jeton
-                    _poser_cookie(cm, jeton, rester)
-                    st.success(msg)
-                    # Ne pas relancer tout de suite : laisser au composant le temps
-                    # d'écrire le cookie (sinon il est perdu au premier F5).
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error(msg)
+    with col_form:
+        onglet_co, onglet_insc = st.tabs(["Connexion", "Inscription"])
 
-    with onglet_insc:
-        with st.form("form_register", clear_on_submit=False):
-            email_i = st.text_input("Email", key="reg_email", autocomplete="email")
-            mdp_i = st.text_input("Mot de passe", type="password", key="reg_mdp",
-                                  autocomplete="new-password")
-            mdp_i2 = st.text_input("Confirmer le mot de passe", type="password", key="reg_mdp2",
-                                   autocomplete="new-password")
-            st.caption(U.MDP_REGLE_USER)
-            ok_i = st.form_submit_button("Créer mon compte", width="stretch")
-        if ok_i:
-            if mdp_i != mdp_i2:
-                st.error("❌ Les deux mots de passe ne correspondent pas.")
-            else:
-                succes, msg = U.register(email_i, mdp_i)
-                (st.success if succes else st.error)(msg)
+        with onglet_co:
+            with st.form("form_login"):
+                st.text_input("Email", key="login_email", autocomplete="email")
+                st.text_input("Mot de passe", type="password", key="login_mdp",
+                              autocomplete="current-password")
+                st.checkbox("Rester connecté 30 jours", key="login_rester")
+                st.form_submit_button("Se connecter", width="stretch", type="primary",
+                                      on_click=_cb_login)
+            _afficher_message("_msg_login")
+
+        with onglet_insc:
+            with st.form("form_register"):
+                st.text_input("Email", key="reg_email", autocomplete="email")
+                st.text_input("Mot de passe", type="password", key="reg_mdp",
+                              autocomplete="new-password")
+                st.text_input("Confirmer le mot de passe", type="password", key="reg_mdp2",
+                              autocomplete="new-password")
+                st.caption(U.MDP_REGLE_USER)
+                st.form_submit_button("Créer mon compte", width="stretch", type="primary",
+                                      on_click=_cb_register)
+            _afficher_message("_msg_reg")
+
+    with col_info:
+        st.subheader("Ce que tu trouveras dans l'app")
+        for emoji, nom, texte in PAGES_INFO:
+            st.markdown(f"**{emoji} {nom}** : {texte}")

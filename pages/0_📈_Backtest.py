@@ -37,6 +37,12 @@ st.set_page_config(
 )
 
 st.title("📈 BacktestBot — Comparateur de stratégies crypto")
+st.caption(
+    "Construis une ou plusieurs stratégies à partir d'indicateurs (RSI, moyennes mobiles, "
+    "MACD, Bollinger) et simule-les sur un actif et une période. Rendement, drawdown et "
+    "points d'achat/vente sont comparés côte à côte — pour tester sur plusieurs actifs, "
+    "va en Multi-actifs ; pour régler TP et SL, va en Optimisation."
+)
 
 # ---------------------------------------------------------------------------
 # Session state : liste des stratégies
