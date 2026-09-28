@@ -1,0 +1,10 @@
+# Configuration Streamlit de l'app (lue au démarrage, en local comme sur Railway)
+
+[theme]
+# Mode sombre pour tout le monde, quel que soit le réglage de l'ordinateur du visiteur.
+# Cohérent avec les graphiques, déjà en template "plotly_dark".
+base = "dark"
+
+[client]
+# Cache le bouton « Deploy » et les options de développement du menu ⋮
+toolbarMode = "viewer"
