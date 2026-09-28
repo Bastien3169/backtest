@@ -30,4 +30,6 @@ __pycache__/
 .DS_Store
 dist/
 
-*.db_Claude/
+
+*.db
+_Claude/
