@@ -15,7 +15,6 @@ import re
 import html as _html
 import streamlit as st
 import pandas as pd
-import extra_streamlit_components as stx
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -29,25 +28,12 @@ from src.views.indicator_bloc import render_indicator_bloc
 st.set_page_config(page_title="Bot Live", page_icon="📈", layout="wide")
 
 # ---------------------------------------------------------------------------
-# 🔒 Protection par mot de passe
+# 🔒 Accès réservé à l'admin
 # ---------------------------------------------------------------------------
-BOT_PASSWORD = os.getenv("BOT_PASSWORD", "")
-
-if BOT_PASSWORD:
-    gestionnaire_cookies = stx.CookieManager(key="bot_auth_manager")
-    cookie_auth = gestionnaire_cookies.get("bot_auth")
-
-    if cookie_auth != "ok":
-        st.title("🔒 Accès protégé")
-        saisie = st.text_input("Mot de passe", type="password", key="saisie_mdp")
-
-        if saisie == BOT_PASSWORD:
-            gestionnaire_cookies.set("bot_auth", "ok", max_age=30 * 24 * 3600)
-            st.rerun()
-        elif saisie:
-            st.error("❌ Mot de passe incorrect")
-
-        st.stop()
+# app.py ne route déjà pas cette page pour un non-admin ; ce garde-fou est une
+# seconde barrière. L'ancien cookie bot_auth="ok" était forgeable à la main.
+from src.auth.ui import require_admin
+require_admin()
 
 # ---------------------------------------------------------------------------
 # Page principale

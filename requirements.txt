@@ -12,4 +12,7 @@ hyperliquid-python-sdk>=0.7.0
 eth-account>=0.10.0
  
 
-
+# Authentification (base utilisateurs PostgreSQL sur Railway)
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+bcrypt>=4.0

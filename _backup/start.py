@@ -27,6 +27,7 @@ DEFAULT_BOTS = [
     # ── Mainnet Hyperliquid — VRAI ARGENT ─────────────────────────────────
     {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_long.json",  "active": True},
     {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_short.json", "active": True},
+    {"bot_file": "bot_mainnet.py", "config": "bot_state_mainnet_free.json",  "active": True},
 ]
 
 
