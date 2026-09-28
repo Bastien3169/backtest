@@ -188,12 +188,31 @@ PAGES_INFO = [
      "Teste d'un coup toutes les combinaisons de take profit et de stop loss sur plusieurs "
      "périodes, pour trouver des réglages qui tiennent partout et pas sur une seule période."),
     ("🧪", "Multi-actifs",
-     "Fige une stratégie et lance-la sur plusieurs cryptos et plusieurs périodes, pour vérifier "
+     "Fige une stratégie et lance-la sur plusieurs actifs et plusieurs périodes, pour vérifier "
      "qu'elle ne marche pas uniquement sur l'actif où tu l'as trouvée."),
     ("📊", "Screening",
      "Classe les cryptos selon leur volatilité, leur corrélation au BTC, leur bêta, leur volume "
      "et leur performance, pour choisir sur quoi travailler."),
 ]
+
+# Adresse de contact affichée dans l'encart « bot ». Variable Railway, pas en dur :
+# le dépôt a été public, pas la peine d'y remettre un email perso.
+CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "").strip()
+
+
+def _encart_bot():
+    ecris_moi = "Écris-moi"
+    if CONTACT_EMAIL:
+        ecris_moi += f" ([{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL}?subject=Module%20bot))"
+    with st.container(border=True):
+        st.markdown("**🤖 Et ensuite ? Automatise ta stratégie**")
+        st.markdown(
+            "Tu as trouvé une stratégie qui tient la route ? Le module bot te permet de "
+            "l'exécuter automatiquement sur ton propre compte, avec tes propres clés : "
+            f"tu gardes le contrôle de A à Z. {ecris_moi} pour l'obtenir."
+        )
+        st.caption("Fonctionne aujourd'hui sur Hyperliquid. Aster et dYdX sont prévus prochainement.")
+
 
 _ENTETE_HTML = """
 <div style="text-align:center; border:2px solid rgba(128,128,128,.45); border-radius:14px;
@@ -202,7 +221,7 @@ _ENTETE_HTML = """
               text-decoration:underline; text-decoration-thickness:3px;
               text-underline-offset:10px;">📈 Backtesting</div>
   <div style="margin-top:16px; opacity:.75; font-size:1.05rem;">
-    Teste tes stratégies crypto sur l'historique avant d'y mettre un euro.
+    Teste tes stratégies sur l'historique d'un actif avant d'y mettre un euro.
   </div>
 </div>
 """
@@ -256,3 +275,4 @@ def login_page():
         st.subheader("Ce que tu trouveras dans l'app")
         for emoji, nom, texte in PAGES_INFO:
             st.markdown(f"**{emoji} {nom}** : {texte}")
+        _encart_bot()
