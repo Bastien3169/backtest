@@ -5,7 +5,8 @@ Lancement : streamlit run app.py   (start.py le fait déjà sur Railway)
 1. Lit le cookie de session et identifie l'utilisateur.
 2. Construit la liste des pages SELON LE RÔLE avec st.navigation :
    - non connecté ou compte non validé → uniquement la page de connexion / inscription
-   - user         → Backtest, Optimisation, Multi-actifs, Screening, Mon compte
+   - user         → Accueil (page d'arrivée), Backtest, Optimisation, Multi-actifs,
+                    Screening, Mon compte
    - admin        → + Bot Live + Admin
    Une page absente de la liste n'existe pas pour cet utilisateur : ni lien dans
    le menu, ni accès en tapant son URL.
@@ -24,7 +25,8 @@ if _ROOT not in sys.path:
 import streamlit as st
 
 from src.auth.users import nb_en_attente
-from src.auth.ui import account_page, cookie_manager, current_user, login_page, logout_button
+from src.auth.ui import (account_page, cookie_manager, current_user, home_page, login_page,
+                         logout_button)
 
 st.set_page_config(
     page_title="BacktestBot",
@@ -41,8 +43,11 @@ if user is None:
                        position="hidden")
 else:
     pages = {
+        "": [
+            st.Page(home_page, title="Accueil", icon="🏠", url_path="accueil", default=True),
+        ],
         "Analyse": [
-            st.Page("pages/0_📈_Backtest.py", title="Backtest", icon="📈", default=True),
+            st.Page("pages/0_📈_Backtest.py", title="Backtest", icon="📈"),
             st.Page("pages/1_🔥_Optimisation.py", title="Optimisation", icon="🔥"),
             st.Page("pages/2_🧪_Multi-actifs.py", title="Multi-actifs", icon="🧪"),
             st.Page("pages/3_📊_Screening.py", title="Screening", icon="📊"),

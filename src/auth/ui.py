@@ -135,6 +135,7 @@ def logout_button(cm: stx.CookieManager):
         badge = "👑 admin" if user["role"] == "admin" else "👤"
         st.caption(f"{badge} {user['email']}")
         st.button("Se déconnecter", key="bt_logout", width="stretch", on_click=_cb_logout)
+        st.caption(f"🏛️ Découvre aussi [FinSim]({FINSIM_URL}), pour l'investissement long terme")
 
 
 def require_admin():
@@ -177,20 +178,21 @@ def account_page():
 # ---------------------------------------------------------------------------
 # Page de connexion / inscription (seule page visible sans être connecté)
 # ---------------------------------------------------------------------------
-# Descriptions des pages, affichées sur la page de connexion (même ordre que le menu).
-# Bot Live n'y figure volontairement pas : réservé à l'admin, inutile de l'annoncer.
+# Descriptions des pages, affichées sur la page de connexion ET sur l'Accueil (même
+# ordre que le menu). Bot Live n'y figure volontairement pas : réservé à l'admin.
+# Le chemin sert aux liens cliquables de l'Accueil : il doit être celui déclaré dans app.py.
 PAGES_INFO = [
-    ("📈", "Backtest",
+    ("📈", "Backtest", "pages/0_📈_Backtest.py",
      "Construis une ou plusieurs stratégies à partir d'indicateurs (RSI, moyennes mobiles, "
      "MACD, Bollinger) et simule-les sur un actif et une période. Rendement, drawdown et "
      "points d'achat/vente sont comparés côte à côte."),
-    ("🔥", "Optimisation",
+    ("🔥", "Optimisation", "pages/1_🔥_Optimisation.py",
      "Teste d'un coup toutes les combinaisons de take profit et de stop loss sur plusieurs "
      "périodes, pour trouver des réglages qui tiennent partout et pas sur une seule période."),
-    ("🧪", "Multi-actifs",
+    ("🧪", "Multi-actifs", "pages/2_🧪_Multi-actifs.py",
      "Fige une stratégie et lance-la sur plusieurs actifs et plusieurs périodes, pour vérifier "
      "qu'elle ne marche pas uniquement sur l'actif où tu l'as trouvée."),
-    ("📊", "Screening",
+    ("📊", "Screening", "pages/3_📊_Screening.py",
      "Classe les cryptos selon leur volatilité, leur corrélation au BTC, leur bêta, leur volume "
      "et leur performance, pour choisir sur quoi travailler."),
 ]
@@ -198,6 +200,27 @@ PAGES_INFO = [
 # Adresse de contact affichée dans l'encart « bot ». Variable Railway, pas en dur :
 # le dépôt a été public, pas la peine d'y remettre un email perso.
 CONTACT_EMAIL = os.getenv("CONTACT_EMAIL", "").strip()
+
+
+FINSIM_URL = "https://finsim.up.railway.app/"
+
+
+def _decrire_pages(cliquable: bool):
+    """Liste des outils. cliquable=True (Accueil) : le nom mène à la page."""
+    for emoji, nom, chemin, texte in PAGES_INFO:
+        if cliquable:
+            st.page_link(chemin, label=f"**{nom}**", icon=emoji)
+            st.caption(texte)
+        else:
+            st.markdown(f"**{emoji} {nom}** : {texte}")
+
+
+def _ligne_finsim():
+    st.caption(
+        f"🏛️ Plutôt investissement long terme ? Découvre [**FinSim**]({FINSIM_URL}) : "
+        "analyse d'indices, d'actions, de cryptos et d'ETF, simulations DCA ou Lump Sum, "
+        "et construction de portefeuille."
+    )
 
 
 def _encart_bot():
@@ -273,6 +296,25 @@ def login_page():
 
     with col_info:
         st.subheader("Ce que tu trouveras dans l'app")
-        for emoji, nom, texte in PAGES_INFO:
-            st.markdown(f"**{emoji} {nom}** : {texte}")
+        _decrire_pages(cliquable=False)
         _encart_bot()
+
+    st.divider()
+    _ligne_finsim()
+
+
+# ---------------------------------------------------------------------------
+# Page « Accueil » (première page après connexion)
+# ---------------------------------------------------------------------------
+def home_page():
+    st.markdown(_ENTETE_HTML, unsafe_allow_html=True)
+
+    col_outils, col_bot = st.columns([1.3, 1], gap="large")
+    with col_outils:
+        st.subheader("Par où commencer ?")
+        _decrire_pages(cliquable=True)
+    with col_bot:
+        _encart_bot()
+
+    st.divider()
+    _ligne_finsim()
