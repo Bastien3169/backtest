@@ -150,6 +150,13 @@ def register(email: str, mdp: str) -> tuple[bool, str]:
             email=email, password_hash=_hash_mdp(mdp), role="user",
             created_at=_now(), failed_attempts=0, approved=False,
         ))
+    # Prévenir l'admin qu'un compte attend sa validation (envoi en arrière-plan,
+    # un échec d'e-mail ne doit jamais faire échouer l'inscription)
+    try:
+        from src.utils.alertes import nouvel_inscrit
+        nouvel_inscrit(email)
+    except Exception as e:
+        print(f"[auth] alerte inscription non envoyée : {e}")
     return True, ("✅ Compte créé. Il sera actif dès que l'administrateur l'aura validé.")
 
 

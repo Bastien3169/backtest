@@ -79,6 +79,23 @@ def _fetch_closes(ticker: str, days: int = JOURS_HISTORIQUE) -> pd.Series | None
     return None if df is None else df["Close"]
 
 
+def _bougies_completes(df: pd.DataFrame) -> pd.DataFrame:
+    """Retire la bougie du jour si elle est encore en cours.
+
+    Les bougies journalières crypto de Yahoo sont découpées à 00:00 UTC et la
+    dernière ligne est la journée EN COURS. À 10 h UTC, son volume ne couvre
+    que 10 heures et son range (haut − bas) est incomplet : la comparer à des
+    journées entières sous-estime systématiquement le volume relatif et fait
+    paraître la volatilité « compressée » alors qu'elle ne l'est pas.
+    """
+    if df is None or df.empty:
+        return df
+    aujourd_hui = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+    if df.index[-1].normalize() >= aujourd_hui:
+        return df.iloc[:-1]
+    return df
+
+
 def _serie_morte(closes: pd.Series, volumes: pd.Series | None) -> bool:
     """Une série figée ou sans volume n'est pas une donnée, c'est un artefact.
 
@@ -145,6 +162,56 @@ def _amplitude_mediane(df: pd.DataFrame, jours: int = FENETRE_RISQUE) -> float |
     if amplitude.empty:
         return None
     return round(float(amplitude.median()), 2)
+
+
+def _compression(df: pd.DataFrame, jours_court: int = 5,
+                 jours_long: int = FENETRE_RISQUE) -> float | None:
+    """Amplitude moyenne des 5 dernières journées / amplitude médiane sur 30 jours.
+
+    < 1 : le range quotidien se resserre (le marché « se comprime »).
+    0,6 = les journées récentes ne font que 60 % de leur amplitude habituelle.
+    Une compression qui coïncide avec une hausse d'OI = des positions
+    s'accumulent sans que le prix bouge : souvent le prélude à un gros mouvement,
+    dont le SENS reste inconnu.
+
+    Calculée sur bougies COMPLÈTES uniquement (voir _bougies_completes).
+    """
+    if df is None or not {"High", "Low", "Close"} <= set(df.columns):
+        return None
+    amplitude = ((df["High"] - df["Low"]) / df["Close"] * 100)
+    amplitude = amplitude.replace([np.inf, -np.inf], np.nan).dropna()
+    if len(amplitude) < jours_long:
+        return None
+    reference = float(amplitude.tail(jours_long).median())
+    if reference <= 0:
+        return None
+    return round(float(amplitude.tail(jours_court).mean()) / reference, 2)
+
+
+def _atr_pct(df: pd.DataFrame, jours: int = FENETRE_RISQUE) -> float | None:
+    """ATR en % du prix : moyenne des « vrais ranges » sur 30 journées complètes.
+
+    Vrai range = max(haut − bas, |haut − clôture veille|, |bas − clôture veille|)
+    → il compte aussi l'écart d'ouverture. Moyenne simple (pas le lissage de
+    Wilder), divisée par la dernière clôture.
+
+    Proche de l'amplitude médiane, mais en MOYENNE : les journées extrêmes le
+    tirent vers le haut. ATR nettement au-dessus de l'amplitude médiane =
+    l'actif a quelques journées violentes qui gonflent son risque réel.
+    """
+    if df is None or not {"High", "Low", "Close"} <= set(df.columns) or len(df) < jours + 1:
+        return None
+    veille = df["Close"].shift(1)
+    vrai_range = pd.concat([
+        df["High"] - df["Low"],
+        (df["High"] - veille).abs(),
+        (df["Low"] - veille).abs(),
+    ], axis=1).max(axis=1)
+    atr = float(vrai_range.tail(jours).mean())
+    derniere = float(df["Close"].iloc[-1])
+    if not derniere or np.isnan(atr):
+        return None
+    return round(atr / derniere * 100, 2)
 
 
 def _rendements(serie: pd.Series, jours: int = FENETRE_RISQUE) -> pd.Series:
@@ -260,6 +327,7 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
     btc_closes = _fetch_closes("BTC-USD")
     if btc_closes is None:
         return pd.DataFrame()
+    perf_btc_7d = perf_sur(btc_closes, 7)
 
     if progress_cb:
         progress_cb(0.02, "Lecture du contexte Hyperliquid...")
@@ -286,9 +354,24 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             ecartes.append(coin["symbol"] + " (série figée)")
             continue
 
-        vol_24h = float(volumes.iloc[-1]) if volumes is not None and len(volumes) else None
-        vol_moy = float(volumes.tail(FENETRE_RISQUE).mean()) if volumes is not None else None
+        # Volume de la dernière journée COMPLÈTE, comparé aux 30 précédentes.
+        # (L'ancien calcul prenait la journée en cours, donc quelques heures de
+        # volume face à des journées entières : biaisé vers le bas.)
+        completes = _bougies_completes(ohlcv)
+        vol_c   = completes["Volume"] if "Volume" in completes.columns else None
+        vol_24h = float(vol_c.iloc[-1]) if vol_c is not None and len(vol_c) else None
+        vol_moy = (float(vol_c.iloc[-(FENETRE_RISQUE + 1):-1].mean())
+                   if vol_c is not None and len(vol_c) > 1 else None)
         vol_rel = round(vol_24h / vol_moy, 2) if (vol_24h and vol_moy) else None
+
+        beta    = _beta_vs_btc(closes, btc_closes)
+        perf_7d = perf_sur(closes, 7)
+        # Alpha 7 j : ce que l'actif a fait AU-DELÀ de ce que son bêta
+        # expliquait. BTC +5 %, β = 2 → +10 % était « attendu » ; un actif à
+        # +10 % n'a alors rien fait de spécial (alpha 0), un actif à +16 % a
+        # une force propre de +6 points.
+        alpha_7d = (round(perf_7d - beta * perf_btc_7d, 2)
+                    if None not in (perf_7d, beta, perf_btc_7d) else None)
 
         hl = contexte_hl.get(coin["hl_name"], {})
 
@@ -298,12 +381,15 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             "ticker":         coin["ticker"],
             "hl_name":        coin["hl_name"],
             "perf_24h":       perf_sur(closes, 1),
-            "perf_7d":        perf_sur(closes, 7),
+            "perf_7d":        perf_7d,
             "perf_30d":       perf_sur(closes, 30),
             "position_range": _position_range(closes),
-            "amplitude_med":  _amplitude_mediane(ohlcv),
+            "amplitude_med":  _amplitude_mediane(completes),
+            "compression":    _compression(completes),
+            "atr_pct":        _atr_pct(completes),
+            "alpha_7d":       alpha_7d,
             "corr_btc":       _correlation_btc(closes, btc_closes),
-            "beta":           _beta_vs_btc(closes, btc_closes),
+            "beta":           beta,
             "volume_24h":     vol_24h,
             "volume_rel":     vol_rel,
             "funding_annuel": hl.get("funding_annuel"),
@@ -321,4 +407,5 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
     df.attrs["ecartes"]  = ecartes
     df.attrs["hl_ok"]    = bool(contexte_hl)
     df.attrs["fenetre"]  = FENETRE_RISQUE
+    df.attrs["perf_btc_7d"] = perf_btc_7d
     return df

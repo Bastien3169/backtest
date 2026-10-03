@@ -35,6 +35,22 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# Enregistreur des photos Hyperliquid (radar du Screening) : un thread en
+# arrière-plan, démarré UNE fois par process Streamlit grâce à cache_resource.
+# Sur Railway, Streamlit tourne en continu → une photo par heure.
+# Après un redéploiement, il redémarre à la première visite de l'app.
+@st.cache_resource(show_spinner=False)
+def _enregistreur_hl():
+    from src.utils.hl_snapshots import start_recorder
+    return start_recorder()
+
+
+try:
+    _enregistreur_hl()
+except Exception as _e:          # le radar ne doit jamais empêcher l'app de démarrer
+    print(f"[app] enregistreur Hyperliquid non démarré : {_e}")
+
 cm = cookie_manager()
 user = current_user(cm)
 
