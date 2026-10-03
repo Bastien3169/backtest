@@ -119,8 +119,8 @@ def tache_quotidienne() -> int:
     n = enregistrer(df, live, meteo["verdict"])
     if n:
         # Un seul e-mail par jour : uniquement quand les états viennent d'être notés
-        from src.utils.alertes import signaux_du_jour
-        signaux_du_jour(df, meteo, R.ETATS)
+        from src.utils.alertes import lettre_du_jour
+        lettre_du_jour(df, meteo, charger(), _aujourd_hui_utc())
     return n
 
 
@@ -179,3 +179,98 @@ def resultats(journal: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     for etat, g in sorted(j.groupby("etat"), key=lambda kv: ORDRE_ETATS.get(kv[0], 99)):
         lignes.append({"etat": etat, **_bloc(g)})
     return pd.DataFrame(lignes), info
+
+
+# ---------------------------------------------------------------------------
+# Signaux = CHANGEMENTS de pastille
+# ---------------------------------------------------------------------------
+# Compter chaque jour où un actif RESTE en 🔵 comme un nouveau cas gonfle les
+# chiffres (5 jours d'affilée = 5 « signaux » qui se chevauchent). Ce qui
+# t'intéresse pour trader, c'est le moment où la pastille CHANGE : on mesure
+# le rendement à partir de ce jour-là, dans le sens du trade.
+
+def _etats_suivis() -> dict:
+    from src.utils.radar import ETATS
+    return {ETATS["demarrage"]: 1, ETATS["shorts"]: -1, ETATS["accumulation"]: 0}
+
+
+def transitions(journal: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Une ligne par passage en 🔵, 🟣 ou 🟢 (l'actif n'y était pas la veille).
+
+    Colonnes ajoutées :
+        sens        +1 (long attendu), −1 (short attendu), 0 (sens inconnu)
+        rend_N      rendement à N jours DANS LE SENS DU TRADE
+                    (pour 🟢 : ampleur du mouvement, quel que soit le sens)
+        marche_N    même mesure sur la moyenne de tous les actifs ce jour-là
+                    — la référence à battre
+        rend_actuel rendement depuis le changement jusqu'au dernier jour noté
+        jours       nombre de jours depuis le changement
+    """
+    j = charger() if journal is None else journal.copy()
+    if j.empty:
+        return pd.DataFrame()
+    suivis = _etats_suivis()
+    j = j.sort_values(["coin", "jour"])
+    j["etat_veille"] = j.groupby("coin")["etat"].shift(1)
+
+    # Prix futurs et dernier prix connu, lus dans le journal lui-même
+    for n in HORIZONS_J:
+        futur = j[["jour", "coin", "prix"]].copy()
+        futur["jour"] = futur["jour"] - pd.Timedelta(days=n)
+        j = j.merge(futur.rename(columns={"prix": f"prix_{n}"}), on=["jour", "coin"], how="left")
+        j[f"perf_{n}"] = (j[f"prix_{n}"] / j["prix"] - 1) * 100
+    dernier = j.sort_values("jour").groupby("coin").tail(1)[["coin", "jour", "prix"]]
+    dernier = dernier.rename(columns={"jour": "jour_dernier", "prix": "prix_dernier"})
+    j = j.merge(dernier, on="coin", how="left")
+
+    # Référence marché : perf moyenne de tous les actifs partis le même jour
+    def _ampleur(serie):
+        return serie.abs().mean()
+    marche = j.groupby("jour")[[f"perf_{n}" for n in HORIZONS_J]].agg(["mean", _ampleur])
+
+    t = j[j["etat"].isin(suivis) & (j["etat"] != j["etat_veille"])].copy()
+    if t.empty:
+        return t
+    t["sens"] = t["etat"].map(suivis)
+    for n in HORIZONS_J:
+        moy = t["jour"].map(marche[(f"perf_{n}", "mean")])
+        amp = t["jour"].map(marche[(f"perf_{n}", "_ampleur")])
+        t[f"rend_{n}"]   = np.where(t["sens"] == 0, t[f"perf_{n}"].abs(), t["sens"] * t[f"perf_{n}"])
+        t[f"marche_{n}"] = np.where(t["sens"] == 0, amp, t["sens"] * moy)
+    perf_act = (t["prix_dernier"] / t["prix"] - 1) * 100
+    t["rend_actuel"] = np.where(t["sens"] == 0, perf_act.abs(), t["sens"] * perf_act)
+    t["jours"] = (t["jour_dernier"] - t["jour"]).dt.days
+    return t.sort_values("jour", ascending=False)
+
+
+def resultats_signaux(t: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Bilan cumulé depuis le début, par type de pastille."""
+    t = transitions() if t is None else t
+    if t is None or t.empty:
+        return pd.DataFrame()
+    lignes = []
+    for etat, g in t.groupby("etat"):
+        ligne = {"etat": etat, "signaux": len(g)}
+        for n in HORIZONS_J:
+            r = g[f"rend_{n}"].dropna()
+            m = g.loc[r.index, f"marche_{n}"]
+            ligne[f"rend_{n}"]     = round(r.mean(), 2) if len(r) else None
+            ligne[f"marche_{n}"]   = round(m.mean(), 2) if len(m) else None
+            ligne[f"gagnants_{n}"] = round((r > 0).mean() * 100) if len(r) and g["sens"].iloc[0] else None
+            ligne[f"n_{n}"]        = len(r)
+        lignes.append(ligne)
+    ordre = list(_etats_suivis())
+    return pd.DataFrame(lignes).sort_values("etat", key=lambda s: s.map(ordre.index))
+
+
+def anciennete(journal: pd.DataFrame, jour) -> dict:
+    """Nombre de jours d'affilée dans l'état actuel, au jour donné (1 = nouveau)."""
+    j = journal[journal["jour"] <= pd.Timestamp(jour)].sort_values(["coin", "jour"])
+    sortie = {}
+    for coin, g in j.groupby("coin"):
+        etats = g["etat"].tolist()
+        n = 1
+        while n < len(etats) and etats[-1 - n] == etats[-1]:
+            n += 1
+        sortie[coin] = n
+    return sortie

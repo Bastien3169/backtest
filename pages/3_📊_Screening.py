@@ -279,9 +279,12 @@ prix 1, 3 et 7 jours plus tard — et est-ce mieux que la moyenne du marché ?**
   noté à 15 h ne serait pas comparable aux autres.
 
 #### Les alertes e-mail
-- **Signaux du jour** : juste après que le journal a noté les états, un e-mail
-  liste les 🔵 Démarrage, 🟣 Shorts en force et 🟢 Accumulation, avec la météo.
-  Aucun e-mail les jours sans aucun des trois.
+- **La lettre du jour** : juste après que le journal a noté les états :
+  🚀 les actifs **passés** en 🔵 ou 🟣 aujourd'hui, ⏩ ceux toujours en cours
+  avec leur rendement depuis le changement de pastille, 🔭 les 🟢 classés du
+  ressort le plus tendu au moins tendu. Pas d'e-mail les jours sans 🔵, 🟣 ni 🟢.
+- **Le lundi** : la lettre ajoute le bilan de la semaine (rendement de chaque
+  signal 🔵/🟣 des 7 derniers jours) et le bilan cumulé depuis le début.
 - **Nouvel inscrit** : un e-mail dès qu'un compte attend ta validation.
 - Envoi via Resend (variable `RESEND_API_KEY` sur Railway) : Railway bloque
   l'envoi direct par Gmail.
@@ -725,6 +728,36 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
             "après une semaine et demie. Explications : onglet « Météo & journal » du guide."
         )
     else:
+        st.markdown("**Depuis le changement de pastille** — la mesure qui compte pour trader")
+        st.caption(
+            "Un signal = le jour où l'actif PASSE en 🔵, 🟣 ou 🟢 (pas chaque jour où il y "
+            "reste). Rendement dans le sens du trade : un 🟣 dont le prix baisse de 5 % "
+            "compte +5 %. Pour 🟢 : ampleur du mouvement, quel que soit le sens. "
+            "« Marché » = la même mesure sur tous les actifs, le même jour : la référence "
+            "à battre."
+        )
+        _sig = J.resultats_signaux()
+        if _sig.empty:
+            st.info("Aucun changement de pastille enregistré pour l'instant.")
+        else:
+            st.dataframe(
+                _sig, hide_index=True, width="stretch",
+                column_order=["etat", "signaux", "rend_1", "marche_1", "rend_3", "marche_3",
+                              "rend_7", "marche_7", "gagnants_7", "n_7"],
+                column_config={
+                    "etat": st.column_config.TextColumn("Pastille", pinned=True),
+                    "signaux": st.column_config.NumberColumn("Signaux"),
+                    "rend_1": st.column_config.NumberColumn("Rend. 1 j", format="%+.2f %%"),
+                    "marche_1": st.column_config.NumberColumn("Marché 1 j", format="%+.2f %%"),
+                    "rend_3": st.column_config.NumberColumn("Rend. 3 j", format="%+.2f %%"),
+                    "marche_3": st.column_config.NumberColumn("Marché 3 j", format="%+.2f %%"),
+                    "rend_7": st.column_config.NumberColumn("Rend. 7 j", format="%+.2f %%"),
+                    "marche_7": st.column_config.NumberColumn("Marché 7 j", format="%+.2f %%"),
+                    "gagnants_7": st.column_config.NumberColumn("Gagnants 7 j", format="%d %%"),
+                    "n_7": st.column_config.NumberColumn("Mesurés à 7 j"),
+                },
+            )
+        st.markdown("**Jour par jour** — tous les jours passés dans chaque état")
         st.caption(
             f"{_info['jours']} jour(s) notés depuis le {_info['debut']:%d/%m/%Y}. "
             "Variation moyenne du prix et part des hausses, 1, 3 et 7 jours après le "
