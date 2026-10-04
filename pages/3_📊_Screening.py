@@ -186,19 +186,21 @@ bot ne pourrait même pas ouvrir. Un actif au plafond passe en 🔴 Surchauffe.
 |---|---|---|---|---|
 | {R.ETATS['surchauffe']} | OI au plafond d'Hyperliquid **ou** funding ≥ {R.FUNDING_SURCHAUFFE:.0f} %/an | — | Tout le monde est déjà long, et paie cher pour le rester. Il ne reste presque plus d'acheteurs pour pousser plus haut. | Pas de nouveau long. Le risque est une cascade de liquidations à la baisse. |
 | {R.ETATS['squeeze']} | Prix en hausse nette, mais OI en forte baisse | Prix +6 %, OI −20 %. | Le prix monte alors que les positions **ferment**. Ce sont des shorts qui se font liquider ou qui rachètent en panique. Leurs rachats forcés font monter le prix, d'où d'autres liquidations : c'est l'effet domino. **Le piège :** la hausse est spectaculaire mais sans carburant. Une fois les shorts sortis, plus personne n'achète, et le prix retombe souvent. | Ne pas courir derrière en long. Au mieux, attendre la fin du squeeze. |
-| {R.ETATS['demarrage']} | Prix en hausse nette, OI en hausse, volume ≥ {R.VOL_REL_DEMARRAGE} × la normale, alpha 7 j positif | Prix +5 %, OI +20 %, volume 2× la normale, et l'actif fait mieux que ce que BTC expliquait. | De l'**argent frais** entre en long. La hausse ne vient pas de shorts qui ferment, elle vient de vrais acheteurs nouveaux, et elle est propre à l'actif, pas un simple suivi du marché. | C'est le meilleur candidat pour ton bot long. Regarde quand même le graphique et la colonne Position 30 j, pour ne pas entrer sur un sommet. |
+| {R.ETATS['demarrage']} | OI en forte hausse, alpha 7 j positif, et soit prix en hausse nette, soit prix en hausse modérée avec un volume ≥ {R.VOL_REL_DEMARRAGE} × la normale | Prix +5 %, OI +20 %, volume 2× la normale, et l'actif fait mieux que ce que BTC expliquait. | De l'**argent frais** entre en long. La hausse ne vient pas de shorts qui ferment, elle vient de vrais acheteurs nouveaux, et elle est propre à l'actif, pas un simple suivi du marché. | C'est le meilleur candidat pour ton bot long. Regarde quand même le graphique et la colonne Position 30 j, pour ne pas entrer sur un sommet. |
 | {R.ETATS['accumulation']} | Prix stable, OI en forte hausse, journées de plus en plus calmes (compression ≤ {R.COMPRESSION_SEUIL}) | Prix +0,3 % sur 24 h, mais OI +25 %, et la compression à 0,7. | Beaucoup de gens ouvrent des positions, longs et shorts, sans que le prix bouge. Ils se placent et attendent. C'est un ressort qu'on comprime : plus il y a de positions engagées, plus le mouvement sera violent quand il partira, parce que les perdants seront forcés de fermer et accéléreront le mouvement. **Le piège :** on ne sait pas dans quel sens ça part. | Une liste de surveillance. Tu attends que le prix choisisse sa direction, et c'est souvent là qu'il passe en 🔵 ou en 🟣. |
-| {R.ETATS['shorts']} | Prix en baisse nette, OI en forte hausse | Prix −5 %, OI +20 %. | De nouveaux vendeurs ouvrent des shorts avec conviction. La baisse est alimentée par de l'argent frais, c'est le miroir exact du 🔵 Démarrage. | C'est le meilleur candidat pour ton bot short. |
+| {R.ETATS['shorts']} | OI en forte hausse, et soit prix en baisse nette, soit prix en baisse modérée avec un volume ≥ {R.VOL_REL_DEMARRAGE} × la normale | Prix −5 %, OI +20 %. | De nouveaux vendeurs ouvrent des shorts avec conviction. La baisse est alimentée par de l'argent frais, c'est le miroir exact du 🔵 Démarrage. | C'est le meilleur candidat pour ton bot short. |
 | {R.ETATS['purge']} | Prix en baisse nette, OI en forte baisse | Prix −6 %, OI −20 %. | Des longs se font liquider ou abandonnent. Le marché se vide de ses acheteurs fragiles. C'est le miroir du 🟠 Squeeze. | Ne pas shorter, c'est trop tard, le gros de la baisse est fait. Une purge finit souvent près d'un creux : à surveiller pour un futur long, une fois que ça se stabilise. |
 | {R.ETATS['attente']} | Pas encore 24 h de photos | — | Le radar n'a pas encore de photo d'il y a 24 h pour mesurer la variation d'OI. | Patience : voir l'onglet « L'historique ». |
-| {R.ETATS['calme']} | Rien de notable | — | — | — |
+| {R.ETATS['calme']} | Aucune règle ne s'applique | — | Ne veut PAS dire que l'actif est calme : il peut bouger beaucoup (regarde Compress. et Vol. rel.) sans que prix et OI racontent une histoire claire. | Rien à faire sur la base du radar. |
 
 *Exemples donnés pour un actif qui bouge habituellement de 4 % par jour.*
 
 #### Que veut dire « net » ?
 - **Prix** : comparé à la colonne *Amplit. j.* (la taille d'une journée
   normale). Net = au moins {R.PRIX_FORT} × cette amplitude ; stable = au plus
-  {R.PRIX_STABLE} ×. Sur un actif à 4 % : net dès ±2 %, stable sous ±1 %. Un actif qui fait 8 % par jour n'est pas « en
+  {R.PRIX_STABLE} × ; entre les deux = **modéré** (compte pour 🔵 et 🟣
+  seulement si le volume confirme). Sur un actif à 4 % : net dès ±2 %,
+  modéré entre ±1 et ±2 %, stable sous ±1 %. Un actif qui fait 8 % par jour n'est pas « en
   hausse » à +3 %.
 - **OI** : |z| ≥ {R.Z_SEUIL} dès que le z-score existe. Avant ça, seuil
   provisoire de ±{R.OI_SEUIL_PROVISOIRE:.0f} % sur 24 h, identique pour tous

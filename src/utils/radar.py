@@ -20,6 +20,10 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Réglages — tous les seuils sont ici, et nulle part ailleurs
 # ---------------------------------------------------------------------------
+# Écart maximal toléré entre l'heure visée et la photo trouvée, par horizon.
+# Avec une photo par heure, la plus proche est toujours à moins de 30 min.
+TOLERANCE_MIN = {4: 35, 24: 120}
+
 HORIZONS_H = (4, 24)             # variations d'OI calculées (1 h retiré : bruit pour un bot journalier)
 
 Z_FENETRE_JOURS = 14             # distribution de référence du z-score
@@ -49,7 +53,7 @@ ETATS = {
     "shorts":       "🟣 Shorts en force",
     "purge":        "⚫ Purge",
     "attente":      "⏳ Historique",
-    "calme":        "· Calme",
+    "calme":        "· Pas de signal net",
 }
 ORDRE_ETATS = {libelle: i for i, libelle in enumerate(ETATS.values())}
 
@@ -62,9 +66,10 @@ def _valeur_il_y_a(history: pd.DataFrame, coins, maintenant: pd.Timestamp,
                    heures: float, colonne: str = "oi") -> pd.Series:
     """Valeur de `colonne` sur la photo la plus proche de (maintenant − heures).
 
-    Tolérance : 40 % de l'horizon, et au moins 35 min pour qu'un horizon court trouve
-    toujours une photo malgré une cadence horaire (9 h 36 pour 24 h). Au-delà,
-    il n'y a pas de photo assez proche → None plutôt qu'un chiffre faux.
+    Tolérance serrée (TOLERANCE_MIN) : au-delà, il n'y a pas de photo assez
+    proche → None plutôt qu'un chiffre faux. L'ancienne tolérance (40 % de
+    l'horizon, soit ±9 h 36 pour 24 h) faisait passer un Δ sur 16 h pour un
+    Δ sur 24 h quand l'historique avait des trous.
     """
     if history.empty:
         return pd.Series(np.nan, index=coins)
@@ -73,7 +78,7 @@ def _valeur_il_y_a(history: pd.DataFrame, coins, maintenant: pd.Timestamp,
     hist = history[["ts", "coin", colonne]].dropna().sort_values("ts")
     fusion = pd.merge_asof(
         cible, hist, on="ts", by="coin", direction="nearest",
-        tolerance=pd.Timedelta(minutes=max(35, heures * 60 * 0.4)),
+        tolerance=pd.Timedelta(minutes=TOLERANCE_MIN.get(heures, 35)),
     )
     return fusion.set_index("coin")[colonne].reindex(coins)
 
@@ -224,16 +229,26 @@ def _classer(r) -> str:
     prix_hausse = p >= PRIX_FORT * amp
     prix_baisse = p <= -PRIX_FORT * amp
     prix_stable = abs(p) <= PRIX_STABLE * amp
+    # Zone intermédiaire : ni stable ni net (entre 0,25 et 0,5 × l'amplitude).
+    # Sans elle, un actif avec un OI qui s'envole et un prix en hausse modérée
+    # tombait en « pas de signal » (cas SAND, octobre 2026).
+    prix_hausse_mod = not prix_stable and not prix_hausse and p > 0
+    prix_baisse_mod = not prix_stable and not prix_baisse and p < 0
+
+    vol = _nombre(r.get("vol_hl_rel"))
+    if vol is None:
+        vol = _nombre(r.get("volume_rel"))
+    vol_confirme = vol is not None and vol >= VOL_REL_DEMARRAGE
 
     if prix_hausse and oi_baisse:
         return ETATS["squeeze"]
 
-    if prix_hausse and oi_hausse:
-        vol   = _nombre(r.get("vol_hl_rel"))
-        if vol is None:
-            vol = _nombre(r.get("volume_rel"))
+    if oi_hausse and (prix_hausse or prix_hausse_mod):
         alpha = _nombre(r.get("alpha_7d"))
-        if (vol is None or vol >= VOL_REL_DEMARRAGE) and (alpha is None or alpha > 0):
+        # Hausse nette : le volume confirme s'il est connu.
+        # Hausse modérée : le volume DOIT confirmer, sinon c'est trop faible.
+        vol_ok = (vol is None or vol_confirme) if prix_hausse else vol_confirme
+        if vol_ok and (alpha is None or alpha > 0):
             return ETATS["demarrage"]
 
     if prix_stable and oi_hausse:
@@ -241,7 +256,7 @@ def _classer(r) -> str:
         if comp is None or comp <= COMPRESSION_SEUIL:
             return ETATS["accumulation"]
 
-    if prix_baisse and oi_hausse:
+    if oi_hausse and (prix_baisse or (prix_baisse_mod and vol_confirme)):
         return ETATS["shorts"]
     if prix_baisse and oi_baisse:
         return ETATS["purge"]
