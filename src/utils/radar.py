@@ -281,48 +281,67 @@ def ajouter_scores(df: pd.DataFrame) -> pd.DataFrame:
 METEO_PORTEUR   = "☀️ Vent porteur"
 METEO_NEUTRE    = "⛅ Neutre"
 METEO_CONTRAIRE = "🌧 Vent contraire"
-LARGEUR_HAUTE, LARGEUR_BASSE = 60.0, 40.0     # % d'actifs au-dessus de leur moyenne 30 j
+LARGEUR_HAUTE, LARGEUR_BASSE = 60.0, 40.0     # % d'actifs au-dessus de leur moyenne
+
+# Moyenne et pente du filtre de tendance. MM50 retenue après backtest sur BTC
+# 2015-2026 (filtre « long seulement si prix > MM et MM plate ou montante ») :
+# MM50 + pente → +72 %/an, pire baisse −52 %, 14 changements de régime / an
+# MM30 + pente → +67 %/an, pire baisse −58 %, 25 changements / an
+# Buy & hold   → +61 %/an, pire baisse −83 %
+METEO_MM    = 50
+PENTE_RECUL = 5          # pente = MM d'aujourd'hui vs MM d'il y a 5 jours
+PENTE_SEUIL = -0.5       # % : au-dessus = MM plate ou montante, en dessous = descendante
 
 
-def _au_dessus_moyenne_30j(closes) -> bool | None:
+def _tendance(closes, n: int = METEO_MM) -> dict | None:
+    """Prix vs sa moyenne n jours, et pente de cette moyenne sur PENTE_RECUL jours."""
     try:
         serie = pd.Series(closes, dtype=float).dropna()
     except Exception:
         return None
-    if len(serie) < 30:
+    if len(serie) < n + PENTE_RECUL:
         return None
-    return bool(serie.iloc[-1] > serie.tail(30).mean())
+    mm = serie.rolling(n).mean()
+    pente = (mm.iloc[-1] / mm.iloc[-1 - PENTE_RECUL] - 1) * 100
+    return {"dessus": bool(serie.iloc[-1] > mm.iloc[-1]), "pente": round(float(pente), 2)}
 
 
 def meteo_marche(df: pd.DataFrame) -> dict:
     """Résumé de l'état du marché entier, à lire AVANT les signaux individuels.
 
-    - BTC au-dessus ou en dessous de sa moyenne 30 j : la marée de fond.
-    - Largeur : % d'actifs au-dessus de leur propre moyenne 30 j. Un marché
+    - BTC vs sa moyenne 50 j ET la pente de cette moyenne : la marée de fond.
+      Un BTC au-dessus d'une MM50 qui baisse encore = rebond dans un marché
+      baissier, pas un beau temps.
+    - Largeur : % d'actifs au-dessus de leur propre moyenne 50 j. Un marché
       où 70 % des actifs montent porte les signaux haussiers ; à 25 %, un
       🔵 isolé nage à contre-courant.
     - Décompte des états haussiers (🔵 🟢) et baissiers (🟣 ⚫).
     """
-    m = {"btc_dessus": None, "btc_perf_7d": None, "largeur": None,
+    m = {"btc_dessus": None, "btc_pente": None, "btc_perf_7d": None, "largeur": None,
          "haussiers": 0, "baissiers": 0, "verdict": METEO_NEUTRE}
     if df is None or df.empty or "closes" not in df:
         return m
 
     btc = df[df["symbol"] == "BTC"]
     if not btc.empty:
-        m["btc_dessus"]  = _au_dessus_moyenne_30j(btc.iloc[0]["closes"])
+        t = _tendance(btc.iloc[0]["closes"])
+        if t:
+            m["btc_dessus"], m["btc_pente"] = t["dessus"], t["pente"]
         m["btc_perf_7d"] = btc.iloc[0].get("perf_7d")
 
-    dessus = df["closes"].apply(_au_dessus_moyenne_30j).dropna()
+    dessus = df["closes"].apply(lambda c: (_tendance(c) or {}).get("dessus")).dropna()
     if len(dessus):
-        m["largeur"] = round(float(dessus.mean()) * 100, 1)
+        m["largeur"] = round(float(dessus.astype(bool).mean()) * 100, 1)
 
     if "etat" in df:
         m["haussiers"] = int(df["etat"].isin([ETATS["demarrage"], ETATS["accumulation"]]).sum())
         m["baissiers"] = int(df["etat"].isin([ETATS["shorts"], ETATS["purge"]]).sum())
 
-    if m["btc_dessus"] is True and (m["largeur"] or 0) >= LARGEUR_HAUTE:
+    pente_ok = m["btc_pente"] is not None and m["btc_pente"] >= PENTE_SEUIL
+    pente_bas = m["btc_pente"] is not None and m["btc_pente"] < PENTE_SEUIL
+    if m["btc_dessus"] is True and pente_ok and (m["largeur"] or 0) >= LARGEUR_HAUTE:
         m["verdict"] = METEO_PORTEUR
-    elif m["btc_dessus"] is False and m["largeur"] is not None and m["largeur"] <= LARGEUR_BASSE:
+    elif (m["btc_dessus"] is False and pente_bas
+          and m["largeur"] is not None and m["largeur"] <= LARGEUR_BASSE):
         m["verdict"] = METEO_CONTRAIRE
     return m

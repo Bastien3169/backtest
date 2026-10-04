@@ -151,7 +151,8 @@ def lettre_du_jour(df, meteo: dict, journal, jour) -> bool:
     corps = (
         f"<p><b>Météo du marché : {html.escape(meteo.get('verdict', '—'))}</b> · "
         f"largeur {_n(meteo.get('largeur'), '{:.0f} %')} · "
-        f"BTC {'au-dessus' if meteo.get('btc_dessus') else 'en dessous'} de sa moyenne 30 j</p>"
+        f"BTC {'au-dessus' if meteo.get('btc_dessus') else 'en dessous'} de sa moyenne 50 j"
+        f" (pente {_n(meteo.get('btc_pente'), '{:+.1f} %')} sur 5 j)</p>"
     )
 
     # 1. Ça part aujourd'hui

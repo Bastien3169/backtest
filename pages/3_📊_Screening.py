@@ -245,16 +245,28 @@ dernière date de plus de {INTERVALLE_MIN} min.
 #### La météo du marché (bandeau au-dessus du tableau)
 À lire **avant** les signaux individuels : un 🔵 Démarrage isolé dans un
 marché qui purge échoue beaucoup plus souvent.
-- **BTC vs sa moyenne 30 j** : au-dessus = la marée monte, en dessous = elle descend.
-- **Largeur** : % des actifs du tableau au-dessus de leur propre moyenne 30 j.
+- **BTC vs sa moyenne {R.METEO_MM} j, et la pente de cette moyenne** : au-dessus
+  d'une moyenne plate ou montante = la marée monte. Au-dessus d'une moyenne qui
+  baisse encore = simple rebond dans un marché baissier, pas un beau temps.
+- **Largeur** : % des actifs du tableau au-dessus de leur propre moyenne {R.METEO_MM} j.
   70 % = presque tout le marché monte ; 25 % = presque tout baisse.
 - **États** : nombre d'actifs en 🔵/🟢 (haussiers) contre 🟣/⚫ (baissiers).
 
 | Verdict | Règle |
 |---|---|
-| {R.METEO_PORTEUR} | BTC au-dessus de sa moyenne 30 j **et** largeur ≥ {R.LARGEUR_HAUTE:.0f} % |
-| {R.METEO_CONTRAIRE} | BTC en dessous **et** largeur ≤ {R.LARGEUR_BASSE:.0f} % |
+| {R.METEO_PORTEUR} | BTC au-dessus de sa MM{R.METEO_MM}, MM plate ou montante, **et** largeur ≥ {R.LARGEUR_HAUTE:.0f} % |
+| {R.METEO_CONTRAIRE} | BTC en dessous de sa MM{R.METEO_MM}, MM qui baisse, **et** largeur ≤ {R.LARGEUR_BASSE:.0f} % |
 | {R.METEO_NEUTRE} | Tout le reste |
+
+« Plate ou montante » : la MM{R.METEO_MM} d'aujourd'hui n'a pas perdu plus de
+{abs(R.PENTE_SEUIL):.1f} % par rapport à celle d'il y a {R.PENTE_RECUL} jours.
+
+**Pourquoi la MM{R.METEO_MM} et pas la MM30 :** backtest sur BTC 2015-2026 d'un
+filtre « long seulement par vent porteur » (partie BTC de la règle) : MM50 +
+pente → +72 %/an, pire baisse −52 %, 14 changements de météo par an ; MM30 +
+pente → +67 %/an, pire baisse −58 %, 25 changements par an ; BTC acheté et
+gardé → +61 %/an, pire baisse −83 %. La MM50 fait un peu mieux et change
+deux fois moins souvent d'avis.
 
 #### Le journal des états
 Chaque jour entre 00:05 et 04:00 UTC — juste après la clôture de la bougie
@@ -414,13 +426,18 @@ with st.container(border=True):
     _w1.metric("Météo du marché", _m["verdict"],
                help="Voir l'onglet « Météo & journal » du guide pour les règles.")
     _btc_txt = {True: "au-dessus", False: "en dessous", None: "—"}[_m["btc_dessus"]]
-    _w2.metric("BTC vs moyenne 30 j", _btc_txt,
+    if _m["btc_pente"] is not None:
+        _btc_txt += (" · ↘ MM qui baisse" if _m["btc_pente"] < R.PENTE_SEUIL
+                     else " · ↗ MM plate/montante")
+    _w2.metric(f"BTC vs moyenne {R.METEO_MM} j", _btc_txt,
                delta=(f"{_m['btc_perf_7d']:+.1f} % sur 7 j".replace(".", ",")
                       if isinstance(_m["btc_perf_7d"], (int, float)) else None),
-               help="BTC au-dessus de sa moyenne des 30 dernières clôtures = la marée "
-                    "de fond monte.")
+               help=f"Prix de BTC vs sa moyenne des {R.METEO_MM} dernières clôtures, et "
+                    f"pente de cette moyenne sur {R.PENTE_RECUL} jours. Au-dessus d'une "
+                    "moyenne qui monte = la marée monte. Au-dessus d'une moyenne qui "
+                    "baisse encore = simple rebond dans un marché baissier.")
     _w3.metric("Largeur", f"{_m['largeur']:.0f} %" if _m["largeur"] is not None else "—",
-               help="% des actifs du tableau au-dessus de leur propre moyenne 30 j. "
+               help=f"% des actifs du tableau au-dessus de leur propre moyenne {R.METEO_MM} j. "
                     f"≥ {R.LARGEUR_HAUTE:.0f} % = marché large en hausse ; "
                     f"≤ {R.LARGEUR_BASSE:.0f} % = marché large en baisse.")
     _w4.metric("États 🔵🟢 / 🟣⚫", f"{_m['haussiers']} / {_m['baissiers']}",
