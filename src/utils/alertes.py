@@ -111,12 +111,12 @@ def _colonnes_signal(r) -> list[str]:
         _n(r.get("px_chg_24h"), "{:+.1f} %"),
         _n(r.get("oi_chg_24h"), "{:+.1f} %"),
         _n(r.get("oi_z"), "{:+.1f}"),
-        _n(r.get("alpha_7d"), "{:+.1f}"),
+        _n(r.get("rsi_14"), "{:.0f}"),
         _n(r.get("funding_annuel"), "{:+.0f} %"),
     ]
 
 
-_ENTETES_SIGNAL = ["Actif", "Δ Prix 24 h", "Δ OI 24 h", "z OI", "Alpha 7 j", "Funding /an"]
+_ENTETES_SIGNAL = ["Actif", "Δ Prix 24 h", "Δ OI 24 h", "z OI", "RSI 14 j", "Funding /an"]
 
 
 def lettre_du_jour(df, meteo: dict, journal, jour) -> bool:

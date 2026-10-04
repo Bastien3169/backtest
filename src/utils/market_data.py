@@ -214,6 +214,24 @@ def _atr_pct(df: pd.DataFrame, jours: int = FENETRE_RISQUE) -> float | None:
     return round(atr / derniere * 100, 2)
 
 
+def _rsi(df: pd.DataFrame, periode: int = 14) -> float | None:
+    """RSI de Wilder sur les clôtures journalières COMPLÈTES (14 jours).
+
+    > 70 : mouvement haussier étiré · < 30 : mouvement baissier étiré.
+    En crypto, un RSI > 70 peut durer des semaines dans une vraie tendance :
+    c'est un voyant d'excès, pas un signal de vente.
+    """
+    if df is None or "Close" not in df or len(df) < periode * 3:
+        return None
+    delta = df["Close"].diff()
+    hausse = delta.clip(lower=0).ewm(alpha=1 / periode, adjust=False).mean()
+    baisse = (-delta.clip(upper=0)).ewm(alpha=1 / periode, adjust=False).mean()
+    if float(baisse.iloc[-1]) == 0:
+        return 100.0
+    rs = float(hausse.iloc[-1]) / float(baisse.iloc[-1])
+    return round(100 - 100 / (1 + rs), 1)
+
+
 def _rendements(serie: pd.Series, jours: int = FENETRE_RISQUE) -> pd.Series:
     return serie.tail(jours + 1).pct_change().dropna()
 
@@ -387,6 +405,7 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             "amplitude_med":  _amplitude_mediane(completes),
             "compression":    _compression(completes),
             "atr_pct":        _atr_pct(completes),
+            "rsi_14":         _rsi(completes),
             "alpha_7d":       alpha_7d,
             "corr_btc":       _correlation_btc(closes, btc_closes),
             "beta":           beta,

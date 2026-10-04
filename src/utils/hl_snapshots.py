@@ -36,7 +36,8 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import requests
 from sqlalchemy import (
-    Column, DateTime, Float, MetaData, String, Table, delete, func, insert, select,
+    Column, DateTime, Float, MetaData, String, Table, and_, delete, extract, func, insert,
+    or_, select,
 )
 
 from src.auth.db import engine
@@ -45,7 +46,10 @@ HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 
 INTERVALLE_MIN  = 60     # une photo par heure : le bot décide à la bougie
                          # journalière, une finesse de 30 min n'apporterait rien
-RETENTION_JOURS = 75     # le z-score regarde 60 jours : 75 laisse de la marge
+RETENTION_JOURS = 75     # photos HORAIRES : le z 24 h regarde 60 jours, 75 laisse de la marge
+RETENTION_JOUR_LONG = 400  # au-delà de 75 j, on ne garde qu'UNE photo par jour (celle de
+                           # 00 h UTC) pendant 400 j : de quoi calculer un z OI 7 j fiable
+                           # (~25 semaines indépendantes) pour ~200 lignes/jour seulement
 
 _metadata = MetaData()
 
@@ -184,8 +188,12 @@ def record_snapshot(live: pd.DataFrame | None = None, force: bool = False) -> bo
         ]
         with engine.begin() as conn:
             conn.execute(insert(hl_snapshots), lignes)
+            # Photos horaires anciennes : on ne garde que celle de 00 h UTC
+            conn.execute(delete(hl_snapshots).where(and_(
+                hl_snapshots.c.ts < _utcnow() - timedelta(days=RETENTION_JOURS),
+                extract("hour", hl_snapshots.c.ts) != 0)))
             conn.execute(delete(hl_snapshots).where(
-                hl_snapshots.c.ts < _utcnow() - timedelta(days=RETENTION_JOURS)))
+                hl_snapshots.c.ts < _utcnow() - timedelta(days=RETENTION_JOUR_LONG)))
         return True
     except Exception as e:
         # Doublon (deux enregistreurs à la même seconde), base verrouillée...
@@ -198,15 +206,25 @@ def record_snapshot(live: pd.DataFrame | None = None, force: bool = False) -> bo
 # Lecture de l'historique
 # ---------------------------------------------------------------------------
 
-def load_history(jours: int = 15) -> pd.DataFrame:
-    """Photos des N derniers jours : colonnes ts, coin, oi, mark_px, day_ntl_vlm."""
+def load_history(jours: int = 15, jours_quotidien: int = 0) -> pd.DataFrame:
+    """Photos des `jours` derniers jours (toutes), plus, si `jours_quotidien` est
+    plus grand, la photo de 00 h UTC de chaque jour jusqu'à `jours_quotidien`
+    (pour le z OI 7 j, sans charger des centaines de milliers de lignes).
+
+    Colonnes : ts, coin, oi, mark_px, day_ntl_vlm.
+    """
     try:
         _init_table()
         depuis = _utcnow() - timedelta(days=jours)
+        condition = hl_snapshots.c.ts >= depuis
+        if jours_quotidien > jours:
+            condition = or_(condition, and_(
+                hl_snapshots.c.ts >= _utcnow() - timedelta(days=jours_quotidien),
+                extract("hour", hl_snapshots.c.ts) == 0))
         requete = (
             select(hl_snapshots.c.ts, hl_snapshots.c.coin, hl_snapshots.c.oi,
                    hl_snapshots.c.mark_px, hl_snapshots.c.day_ntl_vlm)
-            .where(hl_snapshots.c.ts >= depuis)
+            .where(condition)
             .order_by(hl_snapshots.c.ts)
         )
         with engine.connect() as conn:

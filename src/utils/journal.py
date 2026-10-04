@@ -17,7 +17,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Column, Date, DateTime, Float, MetaData, String, Table, func, insert, select
+from sqlalchemy import (Column, Date, DateTime, Float, MetaData, String, Table, func, insert,
+                        inspect, select, text)
 
 from src.auth.db import engine
 
@@ -35,6 +36,7 @@ hl_etats = Table(
     Column("oi_z",     Float),
     Column("alpha_7d", Float),
     Column("score_7d", Float),
+    Column("rsi_14",   Float),    # ajouté oct. 2026 : tester si un RSI > 70 dégrade les 🔵
     Column("meteo",    String(40)),                     # météo du marché ce jour-là
 )
 
@@ -45,6 +47,11 @@ def _init_table() -> None:
     global _table_ok
     if not _table_ok:
         _metadata.create_all(engine)
+        # create_all ne modifie pas une table existante : colonnes ajoutées après coup
+        colonnes = {c["name"] for c in inspect(engine).get_columns("hl_etats")}
+        if "rsi_14" not in colonnes:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE hl_etats ADD COLUMN rsi_14 FLOAT"))
         _table_ok = True
 
 
@@ -89,7 +96,8 @@ def enregistrer(df: pd.DataFrame, live: pd.DataFrame, meteo: str) -> int:
         lignes.append({
             "jour": jour, "coin": coin, "ts": ts, "etat": r.get("etat"), "prix": prix,
             "oi_z": _f(r.get("oi_z")), "alpha_7d": _f(r.get("alpha_7d")),
-            "score_7d": _f(r.get("score_7d")), "meteo": meteo,
+            "score_7d": _f(r.get("score_7d")), "rsi_14": _f(r.get("rsi_14")),
+            "meteo": meteo,
         })
     if lignes:
         with engine.begin() as conn:
@@ -114,7 +122,7 @@ def tache_quotidienne() -> int:
     if df is None or df.empty:
         raise RuntimeError("données Yahoo indisponibles")
     df = R.ajouter_scores(df)
-    df = R.compute_radar(df, live, load_history(jours=R.Z_FENETRE_JOURS + 1))
+    df = R.compute_radar(df, live, load_history(**R.HISTORIQUE_CHARGE))
     meteo = R.meteo_marche(df)
     n = enregistrer(df, live, meteo["verdict"])
     if n:

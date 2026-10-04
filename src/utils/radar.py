@@ -22,7 +22,7 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # Écart maximal toléré entre l'heure visée et la photo trouvée, par horizon.
 # Avec une photo par heure, la plus proche est toujours à moins de 30 min.
-TOLERANCE_MIN = {4: 35, 24: 120}
+TOLERANCE_MIN = {4: 35, 24: 120, 168: 120}
 
 HORIZONS_H = (4, 24)             # variations d'OI calculées (1 h retiré : bruit pour un bot journalier)
 
@@ -33,6 +33,13 @@ HORIZONS_H = (4, 24)             # variations d'OI calculées (1 h retiré : bru
 Z_FENETRE_JOURS = 60
 Z_MIN_POINTS    = 10 * 24        # ≈ 10 jours de photos horaires avant d'afficher un z-score
 MAD_VERS_ECART_TYPE = 1.4826     # MAD × 1,4826 ≈ écart-type pour une loi normale
+
+# z OI 7 j : il faut beaucoup plus de recul (une seule variation 7 j vraiment
+# nouvelle par semaine). Calculé sur la photo de 00 h UTC de chaque jour, sur
+# ~6 mois ; ne s'affiche qu'après ~140 paires quotidiennes (≈ 20 semaines).
+Z7_FENETRE_JOURS = 182
+Z7_MIN_POINTS    = 140
+HISTORIQUE_CHARGE = {"jours": Z_FENETRE_JOURS + 1, "jours_quotidien": Z7_FENETRE_JOURS + 8}
 Z_SEUIL         = 2.0            # |z| ≥ 2 → mouvement inhabituel POUR CET ACTIF
 
 OI_SEUIL_PROVISOIRE = 10.0       # % sur 24 h, utilisé tant que le z-score n'existe pas
@@ -89,7 +96,9 @@ def _valeur_il_y_a(history: pd.DataFrame, coins, maintenant: pd.Timestamp,
 
 
 def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
-               maintenant: pd.Timestamp, heures: int = 24) -> pd.Series:
+               maintenant: pd.Timestamp, heures: int = 24,
+               fenetre_jours: int = Z_FENETRE_JOURS, min_points: int = Z_MIN_POINTS,
+               quotidien: bool = False) -> pd.Series:
     """Où se situe la variation d'OI actuelle sur `heures` dans la distribution
     habituelle des variations sur la même durée de CET actif, sur les
     Z_FENETRE_JOURS derniers jours.
@@ -105,7 +114,9 @@ def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
     if history.empty:
         return z
     hist = history[["ts", "coin", "oi"]].dropna()
-    hist = hist[hist["ts"] >= maintenant - pd.Timedelta(days=Z_FENETRE_JOURS + 1)]
+    hist = hist[hist["ts"] >= maintenant - pd.Timedelta(days=fenetre_jours + 1)]
+    if quotidien:            # une photo par jour (00 h UTC) : comparable sur 6 mois
+        hist = hist[hist["ts"].dt.hour == 0]
     hist = hist.sort_values("ts")
     if hist.empty:
         return z
@@ -115,7 +126,8 @@ def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
     avant["ts"] = avant["ts"] + pd.Timedelta(hours=heures)
     paires = pd.merge_asof(hist, avant.sort_values("ts"), on="ts", by="coin",
                            direction="nearest",
-                           tolerance=pd.Timedelta(minutes=min(45, max(20, heures * 60 * 0.4))))
+                           tolerance=pd.Timedelta(minutes=90 if quotidien else
+                                                  min(45, max(20, heures * 60 * 0.4))))
     paires = paires.dropna(subset=["oi_avant"])
     paires = paires[paires["oi_avant"] > 0]
     paires["chg"] = (paires["oi"] / paires["oi_avant"] - 1) * 100
@@ -124,7 +136,7 @@ def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
     stats = pd.DataFrame({"mediane": groupes.median(), "count": groupes.count()})
     paires["ecart"] = (paires["chg"] - paires["coin"].map(stats["mediane"])).abs()
     stats["echelle"] = paires.groupby("coin")["ecart"].median() * MAD_VERS_ECART_TYPE
-    stats = stats[(stats["count"] >= Z_MIN_POINTS) & (stats["echelle"] > 0)]
+    stats = stats[(stats["count"] >= min_points) & (stats["echelle"] > 0)]
     stats = stats.reindex(coins)
     return ((oi_chg - stats["mediane"]) / stats["echelle"]).round(2)
 
@@ -154,7 +166,7 @@ def compute_radar(df: pd.DataFrame, live: pd.DataFrame, history: pd.DataFrame) -
     df = df.copy()
     coins = df["hl_name"].tolist()
 
-    colonnes_radar = ["px_chg_24h", "oi_chg_4h", "oi_z_4h",
+    colonnes_radar = ["px_chg_24h", "oi_chg_4h", "oi_z_4h", "oi_chg_7d", "oi_z_7d",
                       "oi_chg_24h", "oi_z",
                       "vol_hl_rel", "au_plafond", "etat"]
     if live is None or live.empty:
@@ -181,11 +193,20 @@ def compute_radar(df: pd.DataFrame, live: pd.DataFrame, history: pd.DataFrame) -
         chg = ((oi_now / avant.replace(0, np.nan)) - 1) * 100
         df[f"oi_chg_{h}h"] = chg.round(2).values
 
+    # Δ OI 7 j : pas de z (trop peu de semaines indépendantes en 60 jours).
+    # Se lit à côté du Δ 24 h, pour le MÊME actif : 7 j ≈ 24 h → ça démarre ;
+    # 7 j ≫ 24 h → ça dure depuis plusieurs jours.
+    avant_7j = _valeur_il_y_a(history, coins, maintenant, 168, "oi")
+    df["oi_chg_7d"] = (((oi_now / avant_7j.replace(0, np.nan)) - 1) * 100).round(2).values
+
     # z sur chaque horizon ; celui de 24 h (« oi_z ») est celui des états
     par_coin = df.set_index("hl_name")
     for h in HORIZONS_H:
         cle = "oi_z" if h == 24 else f"oi_z_{h}h"
         df[cle] = _zscore_oi(history, coins, par_coin[f"oi_chg_{h}h"], maintenant, h).values
+    df["oi_z_7d"] = _zscore_oi(history, coins, par_coin["oi_chg_7d"], maintenant, 168,
+                               fenetre_jours=Z7_FENETRE_JOURS, min_points=Z7_MIN_POINTS,
+                               quotidien=True).values
 
     # Volume HL relatif : volume glissant 24 h actuel / sa moyenne sur 14 jours.
     # Glissant = sans le biais de la bougie Yahoo du jour, encore incomplète.

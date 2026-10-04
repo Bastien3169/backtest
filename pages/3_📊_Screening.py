@@ -133,12 +133,42 @@ plus haut et son plus bas dans la journée, en % (médiane sur 30 jours).
 - Le volume ne dit **pas** si ce sont des acheteurs ou des vendeurs : chaque
   achat a une vente en face.
 
-#### Alpha 7 j
+#### RSI 14 j
+Indicateur classique de 0 à 100 sur 14 journées : il compare la force des
+journées de hausse à celle des journées de baisse.
+- **> 70** : mouvement haussier étiré · **< 30** : mouvement baissier étiré.
+- En crypto, une vraie tendance peut rester au-dessus de 70 **pendant des
+  semaines** : ce n'est pas un signal de vente, et exclure les RSI > 70
+  exclurait les meilleurs 🔵.
+- Usage : **voyant d'excès**. RSI > 80 sur un 🔵 = risque d'entrer tard ;
+  RSI < 30 sur un ⚫ = vendeurs épuisés, creux possible.
+- Le journal enregistre le RSI de chaque signal : on saura dans quelques
+  semaines si les 🔵 à RSI > 70 font mieux ou moins bien que les autres.
+
+#### Δ OI 7 j
+Variation de l'OI sur une semaine, à lire **à côté du Δ OI 24 h** du même actif :
+
+| Δ OI 24 h | Δ OI 7 j | Lecture |
+|---|---|---|
+| +15 % | +16 % | Ça démarre aujourd'hui |
+| +15 % | +60 % | Ça dure depuis plusieurs jours — tu arrives tard, ou ça s'amplifie |
+| +15 % | −10 % | Retournement : l'OI baissait et repart |
+
+#### z OI 7 j
+Le Δ OI 7 j comparé aux semaines habituelles de l'actif. Il lui faut beaucoup
+de recul : une seule variation sur 7 jours vraiment nouvelle par semaine. Il
+reste **vide pendant ~5 mois**, puis se remplit tout seul (≈ 20 semaines
+d'historique, sur une photo par jour gardée 400 jours). Avant, il serait du
+bruit.
+
+#### Alpha 7 j (plus affiché, toujours utilisé)
 Ce que l'actif a fait **au-delà de ce que le BTC expliquait**.
 `alpha = perf 7 j − β × perf BTC 7 j`
 Exemple : BTC +5 %, bêta 2 → +10 % était « attendu ». Un actif à +10 % n'a rien
 fait de spécial (alpha 0). Un actif à +16 % a une force propre de +6 points.
 Ça élimine la moitié des faux signaux, qui ne sont que « tout le marché monte ».
+La colonne n'est plus affichée (remplacée par le RSI), mais l'alpha reste un
+filtre de 🔵 Démarrage.
 
 #### Compression
 Amplitude moyenne des 5 dernières journées ÷ amplitude médiane sur 30 jours.
@@ -224,7 +254,8 @@ Dans la **même base que les comptes utilisateurs** (table `hl_snapshots`) :
 PostgreSQL sur Railway, SQLite en local. Pas de fichier JSON : le disque d'un
 conteneur Railway est effacé à chaque redéploiement, et un JSON réécrit
 toutes les heures grossit sans fin. Les photos de plus de 75 jours sont
-supprimées automatiquement (≈ 360 000 lignes au maximum, quelques dizaines de Mo).
+réduites à une seule par jour (celle de 00 h UTC), gardée 400 jours pour le
+z OI 7 j. Au total ≈ 440 000 lignes au maximum, quelques dizaines de Mo.
 
 #### Qui prend les photos ?
 Un enregistreur qui tourne en arrière-plan de l'app Streamlit. Après un
@@ -239,7 +270,8 @@ dernière date de plus de {INTERVALLE_MIN} min.
 | 24 h | Δ OI 24 h, et donc les états |
 | 3 jours | Vol. HL rel. |
 | ~10 jours | z OI 24 h — les états passent du seuil provisoire au seuil propre à chaque actif |
-| 60 jours | le z OI a son recul complet — il s'affine jusque-là |
+| 60 jours | le z OI 24 h a son recul complet — il s'affine jusque-là |
+| ~5 mois | z OI 7 j |
 | quelques semaines | assez de recul pour **backtester** les états |
 """
         )
@@ -353,7 +385,7 @@ def _actualiser_hl():
     if live is not None and not live.empty:
         record_snapshot(live)
     st.session_state.radar_live = live
-    st.session_state.radar_hist = load_history(jours=R.Z_FENETRE_JOURS + 1)
+    st.session_state.radar_hist = load_history(**R.HISTORIQUE_CHARGE)
 
 
 _b1, _b2, _ = st.columns([1.2, 1.4, 3])
@@ -620,11 +652,12 @@ COLONNES = {
         help="Variation sur 30 jours. Comparée à la perf 7 j, elle dit si le "
              "mouvement démarre ou s'il s'essouffle.",
     ),
-    "alpha_7d": st.column_config.NumberColumn(
-        "Alpha 7 j", format="%+.2f pts",
-        help="Perf 7 j MOINS ce que le BTC expliquait (β × perf BTC 7 j). "
-             "Positif = l'actif a une force propre ; ≈ 0 = il a juste suivi le "
-             "marché. BTC +5 %, β 2, actif +16 % → alpha +6 pts.",
+    "rsi_14": st.column_config.NumberColumn(
+        "RSI 14 j", format="%.0f",
+        help="RSI sur 14 journées complètes. > 70 = mouvement haussier étiré, "
+             "< 30 = mouvement baissier étiré. En crypto, une vraie tendance peut "
+             "rester au-dessus de 70 des semaines : c'est un voyant d'excès, pas un "
+             "signal de vente. > 80 sur un 🔵 = tu risques d'entrer tard.",
     ),
     "position_range": st.column_config.ProgressColumn(
         "Position 30 j", min_value=0, max_value=100, format="%.0f",
@@ -675,23 +708,38 @@ COLONNES = {
         "Δ OI 4 h", format="%+.1f %%",
         help="Variation de l'OI sur 4 h, en nombre de jetons. La tendance de la séance.",
     ),
-    "oi_z_4h": st.column_config.NumberColumn(
-        "z OI 4 h", format="%+.1f",
-        help="Δ OI 4 h comparé aux habitudes de CET actif : combien de fois plus "
-             "que d'habitude. |z| ≥ 2 = inhabituel. Disponible après ~10 jours "
-             "d'historique.",
-    ),
     "oi_chg_24h": st.column_config.NumberColumn(
         "Δ OI 24 h", format="%+.1f %%",
-        help="Variation de l'OI sur 24 h, en nombre de jetons. Base des états. "
-             "À lire avec le prix : prix ↑ + OI ↑ = argent frais ; prix ↑ + OI ↓ "
-             "= shorts qui sortent.",
+        help="Variation de l'OI sur 24 h, en nombre de jetons. Sert aux pastilles "
+             "tant que le z OI n'existe pas (~10 premiers jours), puis donne l'ampleur "
+             "réelle. À lire avec le prix : prix ↑ + OI ↑ = argent frais ; prix ↑ + "
+             "OI ↓ = shorts qui sortent.",
+    ),
+    "oi_chg_7d": st.column_config.NumberColumn(
+        "Δ OI 7 j", format="%+.1f %%",
+        help="Variation de l'OI sur 7 jours. À lire à côté du Δ OI 24 h, pour le "
+             "même actif : 7 j ≈ 24 h → ça démarre aujourd'hui ; 7 j bien plus grand "
+             "→ ça dure depuis plusieurs jours ; 7 j négatif et 24 h positif → "
+             "retournement. Disponible après 7 jours d'historique.",
+    ),
+    "oi_z_4h": st.column_config.NumberColumn(
+        "z OI 4 h", format="%+.1f",
+        help="Δ OI 4 h comparé aux habitudes de CET actif (60 jours) : combien de "
+             "fois plus que d'habitude. |z| ≥ 2 = inhabituel. Disponible après ~10 "
+             "jours d'historique.",
     ),
     "oi_z": st.column_config.NumberColumn(
         "z OI 24 h", format="%+.1f",
         help="Variation d'OI 24 h comparée aux habitudes de CET actif (60 jours). "
              "|z| ≥ 2 = inhabituel (~1 fois sur 40). Met BTC et un petit perp sur "
-             "la même échelle. Disponible après ~10 jours d'historique.",
+             "la même échelle. C'est LUI qui fait les pastilles dès qu'il existe "
+             "(~10 jours d'historique).",
+    ),
+    "oi_z_7d": st.column_config.NumberColumn(
+        "z OI 7 j", format="%+.1f",
+        help="Δ OI 7 j comparé aux semaines habituelles de CET actif (~6 mois). "
+             "Vide pendant les premiers mois : il ne s'affiche qu'avec ~20 semaines "
+             "d'historique, en dessous il serait du bruit.",
     ),
     "funding_annuel": st.column_config.NumberColumn(
         "Funding /an", format="%+.1f %%",
@@ -703,7 +751,8 @@ COLONNES = {
 
 VUES = {
     "Radar": ["symbol", "etat", "closes", "px_chg_24h", "amplitude_med", "atr_pct",
-              "compression", "alpha_7d", "volume_rel", "vol_hl_rel", "oi_chg_4h", "oi_z_4h", "oi_chg_24h", "oi_z",
+              "compression", "rsi_14", "volume_rel", "vol_hl_rel",
+              "oi_chg_4h", "oi_chg_24h", "oi_chg_7d", "oi_z_4h", "oi_z", "oi_z_7d",
               "funding_annuel", "oi_m"],
     "Tendance & risque": ["symbol", "name", "closes", "perf_7d",
                           "perf_custom", "perf_30d", "position_range", "amplitude_med", "atr_pct", "beta",
