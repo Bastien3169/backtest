@@ -99,11 +99,13 @@ position nouvelle ne soit ouverte.
 - 4 h : la tendance de la séance · 24 h : la base des états.
 
 #### z OI 4 h / 24 h
-La même variation, mais **comparée aux habitudes de l'actif** sur les 14
+La même variation, mais **comparée aux habitudes de l'actif** sur les 60
 derniers jours. En clair : **combien de fois plus que d'habitude**. Chaque z
 est placé juste à côté de son Δ. Seul le z 24 h sert aux états ; le 4 h montre
 si le mouvement s'accélère pendant la séance.
-`z = (variation actuelle − variation moyenne) / écart-type`
+`z = (variation actuelle − variation médiane) / écart habituel`
+L'écart habituel est calculé de façon robuste (écart médian) : un seul jour
+extrême, comme un listing ou un krach, ne fausse pas « l'habitude ».
 - z = 0 : variation banale pour cet actif.
 - z = +2 : une hausse qu'on ne voit qu'environ 1 fois sur 40 sur cet actif.
 - Pourquoi : +10 % d'OI sur BTC est énorme, sur un petit perp c'est un mardi.
@@ -221,8 +223,8 @@ Une par heure suffit : le bot décide à la bougie journalière.
 Dans la **même base que les comptes utilisateurs** (table `hl_snapshots`) :
 PostgreSQL sur Railway, SQLite en local. Pas de fichier JSON : le disque d'un
 conteneur Railway est effacé à chaque redéploiement, et un JSON réécrit
-toutes les heures grossit sans fin. Les photos de plus de 30 jours sont
-supprimées automatiquement (≈ 145 000 lignes au maximum, une vingtaine de Mo).
+toutes les heures grossit sans fin. Les photos de plus de 75 jours sont
+supprimées automatiquement (≈ 360 000 lignes au maximum, quelques dizaines de Mo).
 
 #### Qui prend les photos ?
 Un enregistreur qui tourne en arrière-plan de l'app Streamlit. Après un
@@ -236,7 +238,8 @@ dernière date de plus de {INTERVALLE_MIN} min.
 | 4 h | Δ OI 4 h |
 | 24 h | Δ OI 24 h, et donc les états |
 | 3 jours | Vol. HL rel. |
-| ~5 jours | z OI 24 h — les états passent du seuil provisoire au seuil propre à chaque actif |
+| ~10 jours | z OI 24 h — les états passent du seuil provisoire au seuil propre à chaque actif |
+| 60 jours | le z OI a son recul complet — il s'affine jusque-là |
 | quelques semaines | assez de recul pour **backtester** les états |
 """
         )
@@ -407,7 +410,7 @@ else:
     if _jours < 1:
         _etape = "les états apparaîtront après 24 h d'enregistrement"
     elif not df.attrs.get("z_actif"):
-        _etape = (f"z-score dans ~{max(0.0, 5 - _jours):.0f} j — en attendant, seuil "
+        _etape = (f"z-score dans ~{max(0.0, R.Z_MIN_POINTS / 24 - _jours):.0f} j — en attendant, seuil "
                   f"provisoire de ±{R.OI_SEUIL_PROVISOIRE:.0f} % d'OI pour tous les actifs")
         _etape = _etape.replace("~0 j", "quelques heures")
     else:
@@ -675,7 +678,7 @@ COLONNES = {
     "oi_z_4h": st.column_config.NumberColumn(
         "z OI 4 h", format="%+.1f",
         help="Δ OI 4 h comparé aux habitudes de CET actif : combien de fois plus "
-             "que d'habitude. |z| ≥ 2 = inhabituel. Disponible après ~5 jours "
+             "que d'habitude. |z| ≥ 2 = inhabituel. Disponible après ~10 jours "
              "d'historique.",
     ),
     "oi_chg_24h": st.column_config.NumberColumn(
@@ -686,9 +689,9 @@ COLONNES = {
     ),
     "oi_z": st.column_config.NumberColumn(
         "z OI 24 h", format="%+.1f",
-        help="Variation d'OI 24 h comparée aux habitudes de CET actif (14 jours). "
+        help="Variation d'OI 24 h comparée aux habitudes de CET actif (60 jours). "
              "|z| ≥ 2 = inhabituel (~1 fois sur 40). Met BTC et un petit perp sur "
-             "la même échelle. Disponible après ~5 jours d'historique.",
+             "la même échelle. Disponible après ~10 jours d'historique.",
     ),
     "funding_annuel": st.column_config.NumberColumn(
         "Funding /an", format="%+.1f %%",

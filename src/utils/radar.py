@@ -26,8 +26,13 @@ TOLERANCE_MIN = {4: 35, 24: 120}
 
 HORIZONS_H = (4, 24)             # variations d'OI calculées (1 h retiré : bruit pour un bot journalier)
 
-Z_FENETRE_JOURS = 14             # distribution de référence du z-score
-Z_MIN_POINTS    = 5 * 24         # ≈ 5 jours de photos horaires avant d'afficher un z-score
+# Fenêtre de référence du z-score. 60 jours = ~60 variations sur 24 h vraiment
+# indépendantes (les photos horaires se chevauchent et n'ajoutent pas
+# d'information) : assez pour une statistique fiable, assez récent pour rester
+# dans le même régime de marché. 14 jours n'en donnaient que 14.
+Z_FENETRE_JOURS = 60
+Z_MIN_POINTS    = 10 * 24        # ≈ 10 jours de photos horaires avant d'afficher un z-score
+MAD_VERS_ECART_TYPE = 1.4826     # MAD × 1,4826 ≈ écart-type pour une loi normale
 Z_SEUIL         = 2.0            # |z| ≥ 2 → mouvement inhabituel POUR CET ACTIF
 
 OI_SEUIL_PROVISOIRE = 10.0       # % sur 24 h, utilisé tant que le z-score n'existe pas
@@ -89,7 +94,10 @@ def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
     habituelle des variations sur la même durée de CET actif, sur les
     Z_FENETRE_JOURS derniers jours.
 
-    z = (variation actuelle − variation moyenne) / écart-type
+    Version ROBUSTE : z = (variation actuelle − médiane) / (1,4826 × MAD),
+    MAD = écart médian à la médiane. Même échelle qu'un z classique, mais un
+    seul jour extrême (listing, krach) ne gonfle plus « l'habitude » pendant
+    des semaines — avec moyenne et écart-type, il rendait le z aveugle.
     En clair : combien de fois plus que d'habitude.
     z = +2 : une hausse d'OI qu'on ne voit qu'environ 1 fois sur 40 sur cet actif.
     """
@@ -112,10 +120,13 @@ def _zscore_oi(history: pd.DataFrame, coins, oi_chg: pd.Series,
     paires = paires[paires["oi_avant"] > 0]
     paires["chg"] = (paires["oi"] / paires["oi_avant"] - 1) * 100
 
-    stats = paires.groupby("coin")["chg"].agg(["mean", "std", "count"])
-    stats = stats[(stats["count"] >= Z_MIN_POINTS) & (stats["std"] > 0)]
+    groupes = paires.groupby("coin")["chg"]
+    stats = pd.DataFrame({"mediane": groupes.median(), "count": groupes.count()})
+    paires["ecart"] = (paires["chg"] - paires["coin"].map(stats["mediane"])).abs()
+    stats["echelle"] = paires.groupby("coin")["ecart"].median() * MAD_VERS_ECART_TYPE
+    stats = stats[(stats["count"] >= Z_MIN_POINTS) & (stats["echelle"] > 0)]
     stats = stats.reindex(coins)
-    return ((oi_chg - stats["mean"]) / stats["std"]).round(2)
+    return ((oi_chg - stats["mediane"]) / stats["echelle"]).round(2)
 
 
 def historique_disponible(history: pd.DataFrame) -> dict:

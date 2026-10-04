@@ -17,8 +17,8 @@ Pas de JSON : le disque d'un conteneur Railway est effacé à chaque
 redéploiement (sauf volume monté), un JSON réécrit en entier toutes les
 heures grossit sans fin, et deux écritures simultanées le corrompent.
 
-Volume : ~200 actifs × 24 photos/jour × 30 jours ≈ 145 000 lignes, une
-vingtaine de Mo. Les photos de plus de RETENTION_JOURS sont purgées.
+Volume : ~200 actifs × 24 photos/jour × 75 jours ≈ 360 000 lignes, quelques
+dizaines de Mo. Les photos de plus de RETENTION_JOURS sont purgées.
 
 Qui prend les photos
 --------------------
@@ -45,7 +45,7 @@ HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 
 INTERVALLE_MIN  = 60     # une photo par heure : le bot décide à la bougie
                          # journalière, une finesse de 30 min n'apporterait rien
-RETENTION_JOURS = 30     # le z-score regarde 14 jours : 30 laisse de la marge
+RETENTION_JOURS = 75     # le z-score regarde 60 jours : 75 laisse de la marge
 
 _metadata = MetaData()
 
