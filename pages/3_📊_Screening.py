@@ -767,6 +767,62 @@ _cols = VUES[_vue]
 for _c in _cols:
     if _c not in df_filtre.columns:
         df_filtre[_c] = None
+
+# ---------------------------------------------------------------------------
+# Entonnoir de tri : jusqu'à 3 passes, chacune ne garde que les meilleurs de
+# la précédente (ex. : plus forts Δ OI 24 h → parmi eux plus forts Δ OI 4 h →
+# parmi eux compressions les plus basses).
+# ---------------------------------------------------------------------------
+_AUCUNE   = "—"
+_NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes")]
+_libelle  = lambda c: c if c == _AUCUNE else (COLONNES.get(c, {}) or {}).get("label") or c
+_SENS     = {"↓ du plus fort au plus faible": False, "↑ du plus faible au plus fort": True}
+_MODES    = ["Garder les N premiers", "Seuil"]
+
+with st.expander("🔻 Entonnoir de tri", expanded=False):
+    st.caption(
+        "Chaque étape trie sur une colonne et ne garde que les meilleurs de "
+        "l'étape précédente. **N premiers** : garde un nombre fixe d'actifs. "
+        "**Seuil** : garde ceux au-dessus (sens ↓) ou en dessous (sens ↑) de la "
+        "valeur — un jour calme peut alors n'en laisser aucun, et c'est une "
+        "information. Un actif sans valeur dans la colonne est écarté à cette "
+        "étape. Étape sur « — » = ignorée. Le tableau suit l'ordre de la "
+        "dernière étape active."
+    )
+    _etapes = []
+    for _i in range(3):
+        e1, e2, e3, e4 = st.columns([3, 3, 2, 2])
+        _col = e1.selectbox(f"Étape {_i + 1} — colonne", [_AUCUNE] + _NUMERIQ,
+                            format_func=_libelle, key=f"scr_ent_col_{_i}")
+        _sens = e2.selectbox("Sens", list(_SENS), key=f"scr_ent_sens_{_i}")
+        _mode = e3.selectbox("Garder", _MODES, key=f"scr_ent_mode_{_i}")
+        if _mode == _MODES[0]:
+            _val = e4.number_input("N", 1, 500, (20, 10, 5)[_i], 1, key=f"scr_ent_n_{_i}")
+        else:
+            _val = e4.number_input("Seuil", value=0.0, step=0.5, key=f"scr_ent_seuil_{_i}")
+        if _col != _AUCUNE:
+            _etapes.append((_col, _SENS[_sens], _mode, _val))
+
+_n_avant = len(df_filtre)
+for _col, _croissant, _mode, _val in _etapes:
+    _serie = pd.to_numeric(df_filtre[_col], errors="coerce")
+    df_filtre = df_filtre[_serie.notna()]
+    _serie = _serie[_serie.notna()]
+    if _mode == _MODES[1]:
+        df_filtre = df_filtre[(_serie <= _val) if _croissant else (_serie >= _val)]
+        _serie = _serie.loc[df_filtre.index]
+    df_filtre = df_filtre.loc[_serie.sort_values(ascending=_croissant).index]
+    if _mode == _MODES[0]:
+        df_filtre = df_filtre.head(int(_val))
+if _etapes:
+    st.caption(f"🔻 Entonnoir : {len(df_filtre)} actifs gardés sur {_n_avant} — "
+               + " → ".join(f"{_libelle(c)} {'↑' if a else '↓'}"
+                            + (f" top {int(v)}" if m == _MODES[0] else f" {'≤' if a else '≥'} {v:g}")
+                            for c, a, m, v in _etapes))
+    if df_filtre.empty:
+        st.warning("L'entonnoir n'a gardé aucun actif. Assouplis un seuil.")
+        st.stop()
+
 _affiche = df_filtre[_cols].copy()
 _affiche.attrs = {}      # métadonnées internes, non sérialisables par Streamlit
 st.dataframe(

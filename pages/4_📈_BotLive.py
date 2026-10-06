@@ -979,11 +979,18 @@ if is_mainnet:
             _c3.markdown("Entrée moy. : `" + format(_p["entry_price"], ".4f") + "`")
             if _p["liquidation_px"]:
                 _c3.caption("Liquidation : " + format(_p["liquidation_px"], ".4f"))
+            # % du prix : mouvement depuis l'entrée, dans le sens de la position
+            # (PnL latent ÷ notional à l'entrée), levier NON compris.
+            _pct_txt = ""
+            if _p["size_usdt"]:
+                _pct = _p["unrealized_pnl"] / _p["size_usdt"] * 100
+                _pct_txt = " (" + format(_pct, "+.2f").replace(".", ",") + " %)"
             _c4.markdown(
                 "PnL latent : <span style='color:" + _coul + ";font-weight:bold'>"
-                + format(_p["unrealized_pnl"], "+.2f") + " $</span>",
+                + format(_p["unrealized_pnl"], "+.2f") + " $" + _pct_txt + "</span>",
                 unsafe_allow_html=True,
             )
+            _c4.caption("% = mouvement du prix depuis l'entrée, levier non compris")
 
             # ── Protection réelle : TP/SL effectivement posés sur HL ──────
             _ord_sym = [o for o in _ordres_live if o["symbol"] == _sym]
@@ -1375,9 +1382,16 @@ with pnl_col:
         nb_trades_aff = len(state.get("trades", []))
         src_trades    = "local"
     color = "#22C55E" if pnl >= 0 else "#EF4444"
+    # % du capital de départ de la session (capital actuel − PnL réalisé)
+    try:
+        _cap_depart = float(bal) - float(pnl)
+        _pnl_pct_txt = (" (" + format(float(pnl) / _cap_depart * 100, "+.2f").replace(".", ",") + " %)"
+                        if _cap_depart > 0 else "")
+    except (TypeError, ValueError):
+        _pnl_pct_txt = ""
     st.markdown(
         f"**PnL Session**  \n"
-        f"<span style='font-size:28px;color:{color};font-weight:bold'>{float(pnl):+.2f}</span>  \n"
+        f"<span style='font-size:28px;color:{color};font-weight:bold'>{float(pnl):+.2f}{_pnl_pct_txt}</span>  \n"
         f"Capital : **{float(bal):.2f} {bal_label}**",
         unsafe_allow_html=True,
     )
@@ -1473,7 +1487,14 @@ if "mainnet" in _selected_json.lower():
             col_nb, col_winrate, col_pnl = st.columns(3)
             col_nb.metric("Trades fermés", len(trades_reconstruits))
             col_winrate.metric("Win rate", f"{winrate:.0f}%")
-            col_pnl.metric("PnL total net (HL)", f"{pnl_total:+.2f} USDC")
+            # % du capital de départ (capital actuel − PnL total), comme le PnL session
+            try:
+                _cap0 = float(bal) - pnl_total
+                _tot_pct = (" (" + format(pnl_total / _cap0 * 100, "+.2f").replace(".", ",") + " %)"
+                            if _cap0 > 0 else "")
+            except (TypeError, ValueError, NameError):
+                _tot_pct = ""
+            col_pnl.metric("PnL total net (HL)", f"{pnl_total:+.2f} USDC{_tot_pct}")
         else:
             st.info("Aucun trade fermé sur ce compte HL")
     except Exception as e:

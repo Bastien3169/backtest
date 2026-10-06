@@ -139,6 +139,23 @@ def bot_entrypoint(bot_file: str, config_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Enregistreur du radar (photos Hyperliquid + journal de nuit + e-mail)
+# ---------------------------------------------------------------------------
+def radar_entrypoint():
+    """Tourne dans un enfant forké, comme un bot : démarre avec le serveur,
+    sans attendre qu'une page de l'app soit ouverte. Imports faits APRÈS le
+    fork pour que l'enfant ait sa propre connexion à la base."""
+    from src.utils.hl_snapshots import boucle_enregistreur
+    boucle_enregistreur()
+
+
+def launch_radar():
+    p = mp.Process(target=radar_entrypoint, name="radar", daemon=False)
+    p.start()
+    return p
+
+
+# ---------------------------------------------------------------------------
 # Mesure mémoire — pour vérifier le gain dans les logs Railway
 # ---------------------------------------------------------------------------
 def _process_rss(pid: str = "self") -> int:
@@ -170,7 +187,7 @@ def _fmt_mb(n: int) -> str:
     return f"{n / 1024 / 1024:.0f} Mo" if n else "n/a"
 
 
-def report_memory(active, streamlit_proc):
+def report_memory(active, streamlit_proc, radar_proc=None):
     total = _container_memory()
     detail = []
     for config, proc in active.items():
@@ -178,6 +195,8 @@ def report_memory(active, streamlit_proc):
         detail.append(f"{tag}={_fmt_mb(_process_rss(proc.pid))}")
     if streamlit_proc and streamlit_proc.poll() is None:
         detail.append(f"streamlit={_fmt_mb(_process_rss(streamlit_proc.pid))}")
+    if radar_proc and radar_proc.is_alive():
+        detail.append(f"radar={_fmt_mb(_process_rss(radar_proc.pid))}")
 
     print(f"[start.py] 📊 Conteneur : {_fmt_mb(total)} facturés "
           f"| parent={_fmt_mb(_process_rss())} | " + " ".join(detail))
@@ -237,7 +256,12 @@ def start_services():
     init_files()
     preload_heavy_modules()
 
+    # Dit à app.py (lancé par Streamlit, qui hérite de l'environnement) de ne
+    # PAS démarrer son propre enregistreur : c'est start.py qui s'en charge.
+    os.environ["RADAR_PAR_START"] = "1"
     streamlit_process = launch_streamlit()
+    radar_process     = launch_radar()
+    radar_retry       = 0.0     # timestamp avant lequel on ne relance pas le radar
 
     active = {}                 # {config: mp.Process}
     failures = {}               # {config: nb de crashs consécutifs}
@@ -308,9 +332,20 @@ def start_services():
             print("[start.py] ⚠️ Streamlit crashé — relancement...")
             streamlit_process = launch_streamlit()
 
+        # ── Surveiller le radar ───────────────────────────────────────────
+        if not radar_process.is_alive():
+            if not radar_retry:
+                print(f"[start.py] ⚠️ radar arrêté (code {radar_process.exitcode}) "
+                      "— relance dans 60s")
+                radar_retry = time.time() + 60
+            elif time.time() >= radar_retry:
+                radar_process.join(timeout=1)
+                radar_process = launch_radar()
+                radar_retry   = 0.0
+
         # ── Rapport mémoire ───────────────────────────────────────────────
         if time.time() - last_mem_report > MEM_REPORT_SEC:
-            report_memory(active, streamlit_process)
+            report_memory(active, streamlit_process, radar_process)
             last_mem_report = time.time()
 
         time.sleep(POLL_SEC)
@@ -325,6 +360,10 @@ def start_services():
         if proc.is_alive():
             print(f"[start.py] {config} ne répond pas — kill")
             proc.kill()
+
+    if radar_process.is_alive():
+        radar_process.terminate()
+        radar_process.join(timeout=10)
 
     if streamlit_process.poll() is None:
         streamlit_process.terminate()

@@ -128,7 +128,10 @@ def perf_sur(closes: pd.Series, jours: int) -> float | None:
     serie = closes.dropna()
     if len(serie) < jours + 1:
         return None
-    return round((serie.iloc[-1] - serie.iloc[-(jours + 1)]) / serie.iloc[-(jours + 1)] * 100, 2)
+    base = serie.iloc[-(jours + 1)]
+    if not base:            # prix à 0 chez Yahoo (actif mort ou donnée cassée)
+        return None
+    return round((serie.iloc[-1] - base) / base * 100, 2)
 
 
 def _position_range(closes: pd.Series, jours: int = FENETRE_RISQUE) -> float | None:

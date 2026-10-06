@@ -22,8 +22,9 @@ dizaines de Mo. Les photos de plus de RETENTION_JOURS sont purgées.
 
 Qui prend les photos
 --------------------
-start_recorder() lance un thread en arrière-plan dans le process Streamlit
-(appelé depuis app.py, une seule fois par process grâce à st.cache_resource).
+Sur Railway, start.py lance boucle_enregistreur() dans son propre process, au
+démarrage du serveur : plus besoin qu'une page soit ouverte. En local
+(`streamlit run app.py` sans start.py), app.py le lance dans un thread.
 La page Screening prend aussi une photo à chaque actualisation si la
 dernière date de plus de INTERVALLE_MIN : l'historique se remplit même si
 le thread a été interrompu.
@@ -258,8 +259,26 @@ def _journal_si_besoin(derniere_tentative: datetime | None) -> datetime | None:
         n = journal.tache_quotidienne()
         print(f"[journal] états du {maintenant:%Y-%m-%d} notés : {n} actifs")
     except Exception as e:
-        print(f"[journal] échec, nouvel essai dans 30 min : {e}")
+        derniere = maintenant + timedelta(minutes=30) >= maintenant.replace(hour=4, minute=0)
+        if not derniere:
+            print(f"[journal] échec, nouvel essai dans 30 min : {e}")
+        else:
+            # Plus de nouvel essai possible avant demain : on prévient, sinon
+            # l'absence d'e-mail ressemble à « aucun signal ».
+            print(f"[journal] ❌ échec à la dernière tentative, pas de journal aujourd'hui : {e}")
+            try:
+                from src.utils.alertes import envoyer
+                envoyer(f"❌ Radar : journal du {maintenant:%d/%m} en échec",
+                        f"<p>La tâche de nuit a échoué jusqu'à 04:00 UTC.</p><p>Dernière erreur : {e}</p>")
+            except Exception as e2:
+                print(f"[alerte] e-mail d'échec non envoyé : {e2}")
     return maintenant
+
+
+def boucle_enregistreur() -> None:
+    """Boucle infinie de l'enregistreur. Lancée par start.py dans son propre
+    process (Railway), ou dans un thread par app.py (lancement local)."""
+    _boucle_enregistreur()
 
 
 def _boucle_enregistreur() -> None:

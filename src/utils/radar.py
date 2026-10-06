@@ -349,6 +349,8 @@ def _tendance(closes, n: int = METEO_MM) -> dict | None:
     if len(serie) < n + PENTE_RECUL:
         return None
     mm = serie.rolling(n).mean()
+    if not mm.iloc[-1 - PENTE_RECUL]:      # prix à 0 chez Yahoo : pas de tendance
+        return None
     pente = (mm.iloc[-1] / mm.iloc[-1 - PENTE_RECUL] - 1) * 100
     return {"dessus": bool(serie.iloc[-1] > mm.iloc[-1]), "pente": round(float(pente), 2)}
 
