@@ -85,4 +85,13 @@ else:
     pg = st.navigation(pages)
     logout_button(cm)
 
+# Streamlit efface l'état d'un widget dès qu'une page s'affiche sans lui : les
+# filtres et l'entonnoir du Screening revenaient à zéro à chaque changement de
+# page. Les réécrire ici, sur les AUTRES pages, les transforme en simples
+# valeurs de session qui survivent ; de retour sur Screening, chaque widget les
+# reprend (ses clés commencent toutes par « scr_ »).
+if pg.title != "Screening":
+    for _k in [k for k in st.session_state if str(k).startswith("scr_")]:
+        st.session_state[_k] = st.session_state[_k]
+
 pg.run()

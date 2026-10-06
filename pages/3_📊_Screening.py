@@ -22,6 +22,8 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 
@@ -374,9 +376,10 @@ with st.expander("🔁 Mettre à jour la liste des actifs (univers Hyperliquid)"
 # ---------------------------------------------------------------------------
 # Chargement
 # ---------------------------------------------------------------------------
-for _cle in ("screening_df", "radar_live", "radar_hist"):
-    if _cle not in st.session_state:
-        st.session_state[_cle] = None
+# Le dernier chargement est gardé côté serveur (src/utils/screening_cache.py) :
+# il survit à un changement de page, un F5, un nouvel onglet ou une veille.
+# Seul un redéploiement le perd.
+from src.utils import screening_cache as SC
 
 
 def _actualiser_hl():
@@ -384,8 +387,19 @@ def _actualiser_hl():
     live = fetch_hl_live()
     if live is not None and not live.empty:
         record_snapshot(live)
-    st.session_state.radar_live = live
-    st.session_state.radar_hist = load_history(**R.HISTORIQUE_CHARGE)
+    SC.poser_hl(live, load_history(**R.HISTORIQUE_CHARGE))
+
+
+def _heure(ts) -> str:
+    """Heure de Paris, avec la date si ce n'est pas aujourd'hui."""
+    if ts is None:
+        return "—"
+    from zoneinfo import ZoneInfo
+    local = ts.astimezone(ZoneInfo("Europe/Paris"))
+    if local.date() == datetime.now(ZoneInfo("Europe/Paris")).date():
+        return local.strftime("%H:%M")
+    return local.strftime("%d/%m %H:%M")
+
 
 
 _b1, _b2, _ = st.columns([1.2, 1.4, 3])
@@ -393,27 +407,34 @@ with _b1:
     _tout = st.button("🔄 Charger / Actualiser", type="primary",
                       help="Recharge tout : prix Yahoo (2-5 min) puis contexte Hyperliquid.")
 with _b2:
-    _hl = st.button("⚡ Actualiser Hyperliquid", disabled=st.session_state.screening_df is None,
+    _hl = st.button("⚡ Actualiser Hyperliquid", disabled=SC.lire()["df"] is None,
                     help="Ne recharge que l'OI, le funding, le prix live et les états (~2 s). "
                          "Les colonnes Yahoo (perfs, bêta, amplitude…) ne bougent pas.")
 
 if _tout:
     progress = st.progress(0, text="Initialisation...")
-    st.session_state.screening_df = load_screening_data(
-        progress_cb=lambda p, m: progress.progress(p, text=m)
-    )
+    _charge = load_screening_data(progress_cb=lambda p, m: progress.progress(p, text=m))
+    if _charge is not None and not _charge.empty:
+        SC.poser_yahoo(_charge)
     progress.text("Contexte Hyperliquid et historique d'OI...")
     _actualiser_hl()
     progress.empty()
-    st.success(f"✅ {len(st.session_state.screening_df)} actifs chargés")
+    if _charge is None or _charge.empty:
+        st.error("❌ Yahoo n'a rien renvoyé — le tableau précédent est conservé.")
+    else:
+        st.success(f"✅ {len(_charge)} actifs chargés")
 elif _hl:
     with st.spinner("Lecture d'Hyperliquid..."):
         _actualiser_hl()
 
-df = st.session_state.screening_df
+_sc = SC.lire()
+df = _sc["df"]
 if df is None or df.empty:
     st.info("Cliquez sur **Charger / Actualiser** pour afficher le tableau.")
     st.stop()
+st.caption(f"🕒 Prix Yahoo chargés à **{_heure(_sc['ts_yahoo'])}** · "
+           f"OI / funding Hyperliquid de **{_heure(_sc['ts_hl'])}** — "
+           "⚡ pour l'OI du moment, 🔄 pour tout recharger.")
 
 _ecartes = df.attrs.get("ecartes") or []
 if _ecartes:
@@ -425,8 +446,8 @@ if _ecartes:
 # ---------------------------------------------------------------------------
 # Radar
 # ---------------------------------------------------------------------------
-df = R.compute_radar(df, st.session_state.radar_live,
-                     st.session_state.radar_hist if st.session_state.radar_hist is not None
+df = R.compute_radar(df, _sc["live"],
+                     _sc["hist"] if _sc["hist"] is not None
                      else pd.DataFrame(columns=["ts", "coin", "oi", "mark_px", "day_ntl_vlm"]))
 
 if not df.attrs.get("radar_ok"):
@@ -488,6 +509,7 @@ _cp1, _cp2 = st.columns([1, 3])
 with _cp1:
     _n_jours = st.number_input(
         "Colonne perf. personnalisée (jours)", min_value=1, max_value=89, value=14, step=1,
+        key="scr_n_jours",
         help="Ajoute une colonne de performance sur la durée de ton choix. "
              "Calculée depuis les clôtures déjà en mémoire — aucun rechargement.",
     )
