@@ -791,7 +791,7 @@ for _c in _cols:
         df_filtre[_c] = None
 
 # ---------------------------------------------------------------------------
-# Entonnoir de tri : jusqu'à 3 passes, chacune ne garde que les meilleurs de
+# Entonnoir de tri : jusqu'à 4 passes, chacune ne garde que les meilleurs de
 # la précédente (ex. : plus forts Δ OI 24 h → parmi eux plus forts Δ OI 4 h →
 # parmi eux compressions les plus basses).
 # ---------------------------------------------------------------------------
@@ -800,6 +800,26 @@ _NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes")]
 _libelle  = lambda c: c if c == _AUCUNE else (COLONNES.get(c, {}) or {}).get("label") or c
 _SENS     = {"↓ du plus fort au plus faible": False, "↑ du plus faible au plus fort": True}
 _MODES    = ["Garder les N premiers", "Seuil"]
+_MM_CHOIX = [_AUCUNE, 10, 20, 30, 50]       # 90 j de bougies chargés : pas de MM100/200
+_MM_PRIX  = ["Prix indifférent", "Prix au-dessus", "Prix en dessous"]
+_MM_PENTE = ["Pente indifférente", "MM qui monte", "MM qui baisse", "MM plate"]
+_MM_RECUL = 5                               # pente mesurée sur 5 jours, comme la météo
+
+
+def _mm_etat(closes, n: int):
+    """(prix au-dessus de la MM ?, pente de la MM en % sur 5 j) — None si l'historique manque.
+    Le dernier point est le prix du jour : « au-dessus » se juge sur le prix actuel."""
+    try:
+        serie = pd.Series(closes, dtype=float).dropna()
+    except Exception:
+        return None
+    if len(serie) < n + _MM_RECUL:
+        return None
+    mm = serie.rolling(n).mean()
+    if not mm.iloc[-1 - _MM_RECUL]:
+        return None
+    return serie.iloc[-1] > mm.iloc[-1], (mm.iloc[-1] / mm.iloc[-1 - _MM_RECUL] - 1) * 100
+
 
 with st.expander("🔻 Entonnoir de tri", expanded=False):
     st.caption(
@@ -811,21 +831,53 @@ with st.expander("🔻 Entonnoir de tri", expanded=False):
         "étape. Étape sur « — » = ignorée. Le tableau suit l'ordre de la "
         "dernière étape active."
     )
+    st.markdown("**Moyennes mobiles** — appliquées avant les étapes de tri")
+    _conds_mm = []
+    for _i in range(2):
+        m1, m2, m3 = st.columns([2, 3, 3])
+        _n = m1.selectbox(f"MM {_i + 1}", _MM_CHOIX, key=f"scr_mm_n_{_i}",
+                          format_func=lambda v: v if v == _AUCUNE else f"MM{v}")
+        _px = m2.selectbox("Prix", _MM_PRIX, key=f"scr_mm_px_{_i}")
+        _pt = m3.selectbox("Pente", _MM_PENTE, key=f"scr_mm_pente_{_i}")
+        if _n != _AUCUNE and (_px != _MM_PRIX[0] or _pt != _MM_PENTE[0]):
+            _conds_mm.append((int(_n), _px, _pt))
+    _mm_plat = st.number_input(
+        "« Plate » = la MM a bougé de moins de ± … % sur 5 jours", 0.05, 10.0, 0.5, 0.1,
+        key="scr_mm_plat",
+        help="0,5 % sur 5 jours, c'est beaucoup pour une MM50 et peu pour une MM10 : "
+             "ajuste selon la MM choisie. Monte = pente au-dessus de ce seuil, "
+             "baisse = en dessous de son opposé.",
+    )
+    st.markdown("**Étapes de tri**")
     _etapes = []
-    for _i in range(3):
+    for _i in range(4):
         e1, e2, e3, e4 = st.columns([3, 3, 2, 2])
         _col = e1.selectbox(f"Étape {_i + 1} — colonne", [_AUCUNE] + _NUMERIQ,
                             format_func=_libelle, key=f"scr_ent_col_{_i}")
         _sens = e2.selectbox("Sens", list(_SENS), key=f"scr_ent_sens_{_i}")
         _mode = e3.selectbox("Garder", _MODES, key=f"scr_ent_mode_{_i}")
         if _mode == _MODES[0]:
-            _val = e4.number_input("N", 1, 500, (20, 10, 5)[_i], 1, key=f"scr_ent_n_{_i}")
+            _val = e4.number_input("N", 1, 500, (20, 10, 5, 3)[_i], 1, key=f"scr_ent_n_{_i}")
         else:
             _val = e4.number_input("Seuil", value=0.0, step=0.5, key=f"scr_ent_seuil_{_i}")
         if _col != _AUCUNE:
             _etapes.append((_col, _SENS[_sens], _mode, _val))
 
 _n_avant = len(df_filtre)
+for _n, _px, _pt in _conds_mm:
+    _etats = df_filtre["closes"].apply(lambda c: _mm_etat(c, _n))
+    _garde = _etats.notna()                   # historique trop court → écarté
+    if _px == _MM_PRIX[1]:
+        _garde &= _etats.apply(lambda e: e is not None and e[0])
+    elif _px == _MM_PRIX[2]:
+        _garde &= _etats.apply(lambda e: e is not None and not e[0])
+    if _pt == _MM_PENTE[1]:
+        _garde &= _etats.apply(lambda e: e is not None and e[1] > _mm_plat)
+    elif _pt == _MM_PENTE[2]:
+        _garde &= _etats.apply(lambda e: e is not None and e[1] < -_mm_plat)
+    elif _pt == _MM_PENTE[3]:
+        _garde &= _etats.apply(lambda e: e is not None and abs(e[1]) <= _mm_plat)
+    df_filtre = df_filtre[_garde]
 for _col, _croissant, _mode, _val in _etapes:
     _serie = pd.to_numeric(df_filtre[_col], errors="coerce")
     df_filtre = df_filtre[_serie.notna()]
@@ -836,11 +888,16 @@ for _col, _croissant, _mode, _val in _etapes:
     df_filtre = df_filtre.loc[_serie.sort_values(ascending=_croissant).index]
     if _mode == _MODES[0]:
         df_filtre = df_filtre.head(int(_val))
-if _etapes:
+if _etapes or _conds_mm:
+    _txt_mm = [f"MM{n}" + ("" if px == _MM_PRIX[0] else (" prix ↑" if px == _MM_PRIX[1] else " prix ↓"))
+               + {"MM qui monte": " monte", "MM qui baisse": " baisse",
+                  "MM plate": " plate"}.get(pt, "")
+               for n, px, pt in _conds_mm]
+    _txt_et = [f"{_libelle(c)} {'↑' if a else '↓'}"
+               + (f" top {int(v)}" if m == _MODES[0] else f" {'≤' if a else '≥'} {v:g}")
+               for c, a, m, v in _etapes]
     st.caption(f"🔻 Entonnoir : {len(df_filtre)} actifs gardés sur {_n_avant} — "
-               + " → ".join(f"{_libelle(c)} {'↑' if a else '↓'}"
-                            + (f" top {int(v)}" if m == _MODES[0] else f" {'≤' if a else '≥'} {v:g}")
-                            for c, a, m, v in _etapes))
+               + " → ".join(_txt_mm + _txt_et))
     if df_filtre.empty:
         st.warning("L'entonnoir n'a gardé aucun actif. Assouplis un seuil.")
         st.stop()
