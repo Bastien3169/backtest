@@ -939,10 +939,11 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
             "Un signal = le jour où l'actif PASSE en 🔵, 🟣 ou 🟢 (pas chaque jour où il y "
             "reste). Rendement dans le sens du trade : un 🟣 dont le prix baisse de 5 % "
             "compte +5 %. Pour 🟢 : ampleur du mouvement, quel que soit le sens. "
-            "« Marché » = la même mesure sur tous les actifs, le même jour : la référence "
-            "à battre."
+            "« Rend. marché » = la même mesure sur tous les actifs, le même jour : la "
+            "référence à battre. Survole un titre de colonne pour son explication."
         )
-        _sig = J.resultats_signaux()
+        _tr = J.transitions()
+        _sig = J.resultats_signaux(_tr)
         if _sig.empty:
             st.info("Aucun changement de pastille enregistré pour l'instant.")
         else:
@@ -952,22 +953,99 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
                               "rend_7", "marche_7", "gagnants_7", "n_7"],
                 column_config={
                     "etat": st.column_config.TextColumn("Pastille", pinned=True),
-                    "signaux": st.column_config.NumberColumn("Signaux"),
-                    "rend_1": st.column_config.NumberColumn("Rend. 1 j", format="%+.2f %%"),
-                    "marche_1": st.column_config.NumberColumn("Marché 1 j", format="%+.2f %%"),
-                    "rend_3": st.column_config.NumberColumn("Rend. 3 j", format="%+.2f %%"),
-                    "marche_3": st.column_config.NumberColumn("Marché 3 j", format="%+.2f %%"),
-                    "rend_7": st.column_config.NumberColumn("Rend. 7 j", format="%+.2f %%"),
-                    "marche_7": st.column_config.NumberColumn("Marché 7 j", format="%+.2f %%"),
-                    "gagnants_7": st.column_config.NumberColumn("Gagnants 7 j", format="%d %%"),
-                    "n_7": st.column_config.NumberColumn("Mesurés à 7 j"),
+                    "signaux": st.column_config.NumberColumn(
+                        "Signaux", help="Nombre de fois où un actif est PASSÉ dans cette "
+                                        "pastille (les jours où il y reste ne comptent pas)."),
+                    "rend_1": st.column_config.NumberColumn(
+                        "Rend. actif 1 j", format="%+.2f %%",
+                        help="Mouvement moyen du prix 1 jour(s) après le passage dans la "
+                             "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
+                             "compte la taille du mouvement quel que soit son sens. "
+                             "À comparer à « Rend. marché » juste à côté."),
+                    "marche_1": st.column_config.NumberColumn(
+                        "Rend. marché 1 j", format="%+.2f %%",
+                        help="La même mesure, calculée sur TOUS les actifs le même jour : "
+                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
+                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                    "rend_3": st.column_config.NumberColumn(
+                        "Rend. actif 3 j", format="%+.2f %%",
+                        help="Mouvement moyen du prix 3 jour(s) après le passage dans la "
+                             "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
+                             "compte la taille du mouvement quel que soit son sens. "
+                             "À comparer à « Rend. marché » juste à côté."),
+                    "marche_3": st.column_config.NumberColumn(
+                        "Rend. marché 3 j", format="%+.2f %%",
+                        help="La même mesure, calculée sur TOUS les actifs le même jour : "
+                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
+                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                    "rend_7": st.column_config.NumberColumn(
+                        "Rend. actif 7 j", format="%+.2f %%",
+                        help="Mouvement moyen du prix 7 jour(s) après le passage dans la "
+                             "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
+                             "compte la taille du mouvement quel que soit son sens. "
+                             "À comparer à « Rend. marché » juste à côté."),
+                    "marche_7": st.column_config.NumberColumn(
+                        "Rend. marché 7 j", format="%+.2f %%",
+                        help="La même mesure, calculée sur TOUS les actifs le même jour : "
+                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
+                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                    "gagnants_7": st.column_config.NumberColumn(
+                        "Gagnants 7 j", format="%d %%",
+                        help="Part des signaux gagnants à 7 jours (dans le sens du trade). "
+                             "Une FRÉQUENCE, pas un gain : 90 % de gagnants peut quand même "
+                             "perdre de l'argent si les 10 % perdants sont gros. Vide pour 🟢 "
+                             "(pas de sens attendu)."),
+                    "n_7": st.column_config.NumberColumn(
+                        "Mesurés à 7 j",
+                        help="Nombre de signaux qui ont déjà 7 jours de recul : les colonnes "
+                             "à 7 j ne portent que sur eux. Moins de ~30 = pas encore fiable."),
                 },
             )
+        if _tr is not None and not _tr.empty:
+            st.markdown("**Détail des signaux** — un trade par ligne, pour voir QUI fait la moyenne")
+            _f_etats = st.multiselect(
+                "Pastilles", sorted(_tr["etat"].unique().tolist()), key="scr_jr_etats",
+                placeholder="Toutes les pastilles",
+            )
+            _det = _tr[_tr["etat"].isin(_f_etats)] if _f_etats else _tr
+            _det = _det.assign(jour=_det["jour"].dt.date)
+            _cfg_det = {
+                "jour": st.column_config.DateColumn("Date", format="DD/MM/YYYY", pinned=True,
+                                                    help="Jour du changement de pastille = jour d'entrée."),
+                "coin": st.column_config.TextColumn("Actif", pinned=True),
+                "etat": st.column_config.TextColumn("Pastille"),
+                "rend_actuel": st.column_config.NumberColumn(
+                    "Rend. depuis l'entrée", format="%+.2f %%",
+                    help="Du jour du changement jusqu'au dernier jour noté, dans le sens du "
+                         "trade (pour 🟢 : taille du mouvement)."),
+                "jours": st.column_config.NumberColumn("Jours", help="Jours écoulés depuis l'entrée."),
+            }
+            for _n in (1, 3, 7):
+                _cfg_det[f"rend_{_n}"] = st.column_config.NumberColumn(
+                    f"Rend. actif {_n} j", format="%+.2f %%",
+                    help=f"Rendement {_n} jour(s) après l'entrée, dans le sens du trade. "
+                         "Vide = pas encore assez de recul.")
+                _cfg_det[f"marche_{_n}"] = st.column_config.NumberColumn(
+                    f"Rend. marché {_n} j", format="%+.2f %%",
+                    help="Même mesure sur tous les actifs, le même jour : la référence à battre.")
+            st.dataframe(
+                _det, hide_index=True, width="stretch",
+                height=min(420, 35 * len(_det) + 40),
+                column_order=["jour", "coin", "etat", "rend_1", "marche_1", "rend_3", "marche_3",
+                              "rend_7", "marche_7", "rend_actuel", "jours"],
+                column_config=_cfg_det,
+            )
+            st.caption(f"{len(_det)} signal(aux) · du plus récent au plus ancien · "
+                       "clique sur un en-tête pour trier.")
+
         st.markdown("**Jour par jour** — tous les jours passés dans chaque état")
         st.caption(
             f"{_info['jours']} jour(s) notés depuis le {_info['debut']:%d/%m/%Y}. "
-            "Variation moyenne du prix et part des hausses, 1, 3 et 7 jours après le "
-            "signal. Moins de ~30 cas sur une ligne = pas encore significatif."
+            "Variation moyenne du prix et part des cas en hausse, 1, 3 et 7 jours "
+            "plus tard. Moins de ~30 cas sur une ligne = pas encore significatif."
         )
         st.dataframe(
             _res,
@@ -977,19 +1055,58 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
                           "ampleur_3", "moy_7", "hausse_7", "ampleur_7", "n_7"],
             column_config={
                 "etat": st.column_config.TextColumn("État", pinned=True),
-                "cas": st.column_config.NumberColumn("Jours × actifs"),
-                "moy_1": st.column_config.NumberColumn("Moy. 1 j", format="%+.2f %%"),
-                "hausse_1": st.column_config.NumberColumn("% hausse 1 j", format="%d %%"),
-                "moy_3": st.column_config.NumberColumn("Moy. 3 j", format="%+.2f %%"),
-                "hausse_3": st.column_config.NumberColumn("% hausse 3 j", format="%d %%"),
+                "cas": st.column_config.NumberColumn(
+                    "Jours × actifs",
+                    help="Nombre de couples (jour, actif) passés dans cet état : un actif "
+                         "resté 5 jours en 🟢 compte 5 cas."),
+                "moy_1": st.column_config.NumberColumn(
+                    "Rend. moyen trades 1 j", format="%+.2f %%",
+                    help="Rendement MOYEN 1 jour(s) plus tard. Dit COMBIEN on gagne ou "
+                         "perd en moyenne : c'est lui qui fait l'argent. ⚠️ Compté en sens "
+                         "LONG pour tous les états : pour 🟣, un chiffre positif veut dire "
+                         "que le prix a monté, donc que le short a perdu. Chaque jour passé "
+                         "dans l'état compte comme un trade."),
+                "hausse_1": st.column_config.NumberColumn(
+                    "% trades gagnants 1 j", format="%d %%",
+                    help="Part des trades gagnants 1 jour(s) plus tard. Une FRÉQUENCE, "
+                         "pas un gain : 9 trades à +1 % et 1 à −20 % donnent 90 % de "
+                         "gagnants mais un rendement moyen de −1,1 %. Toujours la lire avec "
+                         "« Rend. moyen trades » à côté. ⚠️ Compté en sens LONG : pour 🟣, "
+                         "un « gagnant » ici est un short perdant."),
+                "moy_3": st.column_config.NumberColumn(
+                    "Rend. moyen trades 3 j", format="%+.2f %%",
+                    help="Rendement MOYEN 3 jour(s) plus tard. Dit COMBIEN on gagne ou "
+                         "perd en moyenne : c'est lui qui fait l'argent. ⚠️ Compté en sens "
+                         "LONG pour tous les états : pour 🟣, un chiffre positif veut dire "
+                         "que le prix a monté, donc que le short a perdu. Chaque jour passé "
+                         "dans l'état compte comme un trade."),
+                "hausse_3": st.column_config.NumberColumn(
+                    "% trades gagnants 3 j", format="%d %%",
+                    help="Part des trades gagnants 3 jour(s) plus tard. Une FRÉQUENCE, "
+                         "pas un gain : 9 trades à +1 % et 1 à −20 % donnent 90 % de "
+                         "gagnants mais un rendement moyen de −1,1 %. Toujours la lire avec "
+                         "« Rend. moyen trades » à côté. ⚠️ Compté en sens LONG : pour 🟣, "
+                         "un « gagnant » ici est un short perdant."),
                 "ampleur_3": st.column_config.NumberColumn(
                     "Ampleur 3 j", format="%.2f %%",
                     help="Taille moyenne du mouvement à 3 jours, quel que soit son sens "
                          "(+5 % et −5 % comptent tous deux 5 %). C'est LA mesure pour "
                          "🟢 Accumulation : si elle n'est pas nettement au-dessus de la "
                          "référence, le « ressort » n'existe pas."),
-                "moy_7": st.column_config.NumberColumn("Moy. 7 j", format="%+.2f %%"),
-                "hausse_7": st.column_config.NumberColumn("% hausse 7 j", format="%d %%"),
+                "moy_7": st.column_config.NumberColumn(
+                    "Rend. moyen trades 7 j", format="%+.2f %%",
+                    help="Rendement MOYEN 7 jour(s) plus tard. Dit COMBIEN on gagne ou "
+                         "perd en moyenne : c'est lui qui fait l'argent. ⚠️ Compté en sens "
+                         "LONG pour tous les états : pour 🟣, un chiffre positif veut dire "
+                         "que le prix a monté, donc que le short a perdu. Chaque jour passé "
+                         "dans l'état compte comme un trade."),
+                "hausse_7": st.column_config.NumberColumn(
+                    "% trades gagnants 7 j", format="%d %%",
+                    help="Part des trades gagnants 7 jour(s) plus tard. Une FRÉQUENCE, "
+                         "pas un gain : 9 trades à +1 % et 1 à −20 % donnent 90 % de "
+                         "gagnants mais un rendement moyen de −1,1 %. Toujours la lire avec "
+                         "« Rend. moyen trades » à côté. ⚠️ Compté en sens LONG : pour 🟣, "
+                         "un « gagnant » ici est un short perdant."),
                 "ampleur_7": st.column_config.NumberColumn(
                     "Ampleur 7 j", format="%.2f %%",
                     help="Taille moyenne du mouvement à 7 jours, quel que soit son sens."),
