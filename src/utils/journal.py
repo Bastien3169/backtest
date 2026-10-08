@@ -210,7 +210,10 @@ def transitions(journal: pd.DataFrame | None = None) -> pd.DataFrame:
         rend_N      rendement à N jours DANS LE SENS DU TRADE
                     (pour 🟢 : ampleur du mouvement, quel que soit le sens)
         marche_N    même mesure sur la moyenne de tous les actifs ce jour-là
-                    — la référence à battre
+                    — la référence à battre (pour 🟢 : amplitude absolue moyenne)
+        brut_N      variation moyenne de tous les actifs ce jour-là, avec son
+                    signe, sans tenir compte du sens du trade : le contexte
+                    (« le marché a fait −4,5 % »), identique pour toutes les pastilles
         rend_actuel rendement depuis le changement jusqu'au dernier jour noté
         jours       nombre de jours depuis le changement
     """
@@ -245,6 +248,7 @@ def transitions(journal: pd.DataFrame | None = None) -> pd.DataFrame:
         amp = t["jour"].map(marche[(f"perf_{n}", "_ampleur")])
         t[f"rend_{n}"]   = np.where(t["sens"] == 0, t[f"perf_{n}"].abs(), t["sens"] * t[f"perf_{n}"])
         t[f"marche_{n}"] = np.where(t["sens"] == 0, amp, t["sens"] * moy)
+        t[f"brut_{n}"]   = moy
     perf_act = (t["prix_dernier"] / t["prix"] - 1) * 100
     t["rend_actuel"] = np.where(t["sens"] == 0, perf_act.abs(), t["sens"] * perf_act)
     t["jours"] = (t["jour_dernier"] - t["jour"]).dt.days
@@ -264,6 +268,8 @@ def resultats_signaux(t: pd.DataFrame | None = None) -> pd.DataFrame:
             m = g.loc[r.index, f"marche_{n}"]
             ligne[f"rend_{n}"]     = round(r.mean(), 2) if len(r) else None
             ligne[f"marche_{n}"]   = round(m.mean(), 2) if len(m) else None
+            b = g.loc[r.index, f"brut_{n}"]
+            ligne[f"brut_{n}"]     = round(b.mean(), 2) if len(b) else None
             ligne[f"gagnants_{n}"] = round((r > 0).mean() * 100) if len(r) and g["sens"].iloc[0] else None
             ligne[f"n_{n}"]        = len(r)
         lignes.append(ligne)

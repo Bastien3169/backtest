@@ -940,7 +940,9 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
             "reste). Rendement dans le sens du trade : un 🟣 dont le prix baisse de 5 % "
             "compte +5 %. Pour 🟢 : ampleur du mouvement, quel que soit le sens. "
             "« Rend. marché » = la même mesure sur tous les actifs, le même jour : la "
-            "référence à battre. Survole un titre de colonne pour son explication."
+            "référence à battre (pour 🟢 : amplitude absolue moyenne du marché). "
+            "« Marché » = ce que le marché a fait, avec son signe. "
+            "Survole un titre de colonne pour son explication."
         )
         _tr = J.transitions()
         _sig = J.resultats_signaux(_tr)
@@ -949,8 +951,9 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
         else:
             st.dataframe(
                 _sig, hide_index=True, width="stretch",
-                column_order=["etat", "signaux", "rend_1", "marche_1", "rend_3", "marche_3",
-                              "rend_7", "marche_7", "gagnants_7", "n_7"],
+                column_order=["etat", "signaux", "rend_1", "marche_1", "brut_1",
+                              "rend_3", "marche_3", "brut_3",
+                              "rend_7", "marche_7", "brut_7", "gagnants_7", "n_7"],
                 column_config={
                     "etat": st.column_config.TextColumn("Pastille", pinned=True),
                     "signaux": st.column_config.NumberColumn(
@@ -960,38 +963,65 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
                         "Rend. actif 1 j", format="%+.2f %%",
                         help="Mouvement moyen du prix 1 jour(s) après le passage dans la "
                              "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
-                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
-                             "compte la taille du mouvement quel que soit son sens. "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %). "
+                             "Pour 🟢 : AMPLITUDE ABSOLUE du mouvement (+5 % et −5 % comptent "
+                             "tous deux 5 %), car le sens est inconnu. "
                              "À comparer à « Rend. marché » juste à côté."),
                     "marche_1": st.column_config.NumberColumn(
                         "Rend. marché 1 j", format="%+.2f %%",
                         help="La même mesure, calculée sur TOUS les actifs le même jour : "
-                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
-                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                             "🔵 = long sur tous les actifs, 🟣 = short sur tous les actifs, "
+                             "🟢 = AMPLITUDE ABSOLUE moyenne du marché (tailles des mouvements "
+                             "sans leur signe, donc toujours positive). La pastille n'est utile "
+                             "que si « Rend. actif » est au-dessus."),
+                    "brut_1": st.column_config.NumberColumn(
+                        "Marché 1 j", format="%+.2f %%",
+                        help="Ce que le marché a fait, tout simplement : variation moyenne de "
+                             "tous les actifs, AVEC son signe, sans tenir compte du sens du "
+                             "trade. Même chiffre pour toutes les pastilles des mêmes jours. "
+                             "Pour le contexte seulement : ne pas le comparer au 🟢."),
                     "rend_3": st.column_config.NumberColumn(
                         "Rend. actif 3 j", format="%+.2f %%",
                         help="Mouvement moyen du prix 3 jour(s) après le passage dans la "
                              "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
-                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
-                             "compte la taille du mouvement quel que soit son sens. "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %). "
+                             "Pour 🟢 : AMPLITUDE ABSOLUE du mouvement (+5 % et −5 % comptent "
+                             "tous deux 5 %), car le sens est inconnu. "
                              "À comparer à « Rend. marché » juste à côté."),
                     "marche_3": st.column_config.NumberColumn(
                         "Rend. marché 3 j", format="%+.2f %%",
                         help="La même mesure, calculée sur TOUS les actifs le même jour : "
-                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
-                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                             "🔵 = long sur tous les actifs, 🟣 = short sur tous les actifs, "
+                             "🟢 = AMPLITUDE ABSOLUE moyenne du marché (tailles des mouvements "
+                             "sans leur signe, donc toujours positive). La pastille n'est utile "
+                             "que si « Rend. actif » est au-dessus."),
+                    "brut_3": st.column_config.NumberColumn(
+                        "Marché 3 j", format="%+.2f %%",
+                        help="Ce que le marché a fait, tout simplement : variation moyenne de "
+                             "tous les actifs, AVEC son signe, sans tenir compte du sens du "
+                             "trade. Même chiffre pour toutes les pastilles des mêmes jours. "
+                             "Pour le contexte seulement : ne pas le comparer au 🟢."),
                     "rend_7": st.column_config.NumberColumn(
                         "Rend. actif 7 j", format="%+.2f %%",
                         help="Mouvement moyen du prix 7 jour(s) après le passage dans la "
                              "pastille, DANS LE SENS DU TRADE : pour 🔵 une hausse est un gain, "
-                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %), pour 🟢 on "
-                             "compte la taille du mouvement quel que soit son sens. "
+                             "pour 🟣 une baisse est un gain (−4 % de prix = +4 %). "
+                             "Pour 🟢 : AMPLITUDE ABSOLUE du mouvement (+5 % et −5 % comptent "
+                             "tous deux 5 %), car le sens est inconnu. "
                              "À comparer à « Rend. marché » juste à côté."),
                     "marche_7": st.column_config.NumberColumn(
                         "Rend. marché 7 j", format="%+.2f %%",
                         help="La même mesure, calculée sur TOUS les actifs le même jour : "
-                             "ce que tu aurais obtenu en choisissant un actif au hasard. "
-                             "La pastille n'est utile que si « Rend. actif » est au-dessus."),
+                             "🔵 = long sur tous les actifs, 🟣 = short sur tous les actifs, "
+                             "🟢 = AMPLITUDE ABSOLUE moyenne du marché (tailles des mouvements "
+                             "sans leur signe, donc toujours positive). La pastille n'est utile "
+                             "que si « Rend. actif » est au-dessus."),
+                    "brut_7": st.column_config.NumberColumn(
+                        "Marché 7 j", format="%+.2f %%",
+                        help="Ce que le marché a fait, tout simplement : variation moyenne de "
+                             "tous les actifs, AVEC son signe, sans tenir compte du sens du "
+                             "trade. Même chiffre pour toutes les pastilles des mêmes jours. "
+                             "Pour le contexte seulement : ne pas le comparer au 🟢."),
                     "gagnants_7": st.column_config.NumberColumn(
                         "Gagnants 7 j", format="%d %%",
                         help="Part des signaux gagnants à 7 jours (dans le sens du trade). "
@@ -1030,12 +1060,18 @@ with st.expander("📒 Journal des états — est-ce que le radar marche ?", exp
                          "Vide = pas encore assez de recul.")
                 _cfg_det[f"marche_{_n}"] = st.column_config.NumberColumn(
                     f"Rend. marché {_n} j", format="%+.2f %%",
-                    help="Même mesure sur tous les actifs, le même jour : la référence à battre.")
+                    help="Même mesure sur tous les actifs, le même jour : la référence à "
+                         "battre. Pour 🟢 : AMPLITUDE ABSOLUE moyenne du marché.")
+                _cfg_det[f"brut_{_n}"] = st.column_config.NumberColumn(
+                    f"Marché {_n} j", format="%+.2f %%",
+                    help="Variation moyenne de tous les actifs ce jour-là, avec son signe : "
+                         "ce que le marché a fait, tout simplement.")
             st.dataframe(
                 _det, hide_index=True, width="stretch",
                 height=min(420, 35 * len(_det) + 40),
-                column_order=["jour", "coin", "etat", "rend_1", "marche_1", "rend_3", "marche_3",
-                              "rend_7", "marche_7", "rend_actuel", "jours"],
+                column_order=["jour", "coin", "etat", "rend_1", "marche_1", "brut_1",
+                              "rend_3", "marche_3", "brut_3", "rend_7", "marche_7", "brut_7",
+                              "rend_actuel", "jours"],
                 column_config=_cfg_det,
             )
             st.caption(f"{len(_det)} signal(aux) · du plus récent au plus ancien · "
