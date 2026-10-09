@@ -424,6 +424,19 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(rows)
+
+    # Flux Binance : qui est pressé, acheteurs ou vendeurs ? (~15-30 s, en parallèle)
+    if progress_cb:
+        progress_cb(1.0, "Flux acheteurs / vendeurs (Binance)...")
+    try:
+        from src.utils.flux_binance import flux
+        _flux = flux([{"symbol": r["symbol"], "hl_name": r["hl_name"]} for r in rows])
+    except Exception as e:
+        print(f"[flux] indisponible : {e}")
+        _flux = {}
+    for _c in ("achat_spot_24h", "achat_perp_24h", "ls_comptes"):
+        df[_c] = [(_flux.get(h) or {}).get(_c) for h in df["hl_name"]] if len(df) else []
+
     # Transportés avec le tableau pour que la page puisse dire ce qu'elle a
     # écarté, sans changer la signature de la fonction.
     df.attrs["ecartes"]  = ecartes

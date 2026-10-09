@@ -37,6 +37,11 @@ hl_etats = Table(
     Column("alpha_7d", Float),
     Column("score_7d", Float),
     Column("rsi_14",   Float),    # ajouté oct. 2026 : tester si un RSI > 70 dégrade les 🔵
+    # Ajoutés oct. 2026 : flux Binance, pour tester plus tard s'ils donnent le
+    # sens des 🟢 (voir src/utils/flux_binance.py)
+    Column("achat_spot", Float),  # % du volume spot 24 h acheté au marché
+    Column("achat_perp", Float),  # idem sur les futures
+    Column("ls_comptes", Float),  # % de comptes futures nets longs
     Column("meteo",    String(40)),                     # météo du marché ce jour-là
 )
 
@@ -49,9 +54,10 @@ def _init_table() -> None:
         _metadata.create_all(engine)
         # create_all ne modifie pas une table existante : colonnes ajoutées après coup
         colonnes = {c["name"] for c in inspect(engine).get_columns("hl_etats")}
-        if "rsi_14" not in colonnes:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE hl_etats ADD COLUMN rsi_14 FLOAT"))
+        for _col in ("rsi_14", "achat_spot", "achat_perp", "ls_comptes"):
+            if _col not in colonnes:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE hl_etats ADD COLUMN {_col} FLOAT"))
         _table_ok = True
 
 
@@ -97,6 +103,8 @@ def enregistrer(df: pd.DataFrame, live: pd.DataFrame, meteo: str) -> int:
             "jour": jour, "coin": coin, "ts": ts, "etat": r.get("etat"), "prix": prix,
             "oi_z": _f(r.get("oi_z")), "alpha_7d": _f(r.get("alpha_7d")),
             "score_7d": _f(r.get("score_7d")), "rsi_14": _f(r.get("rsi_14")),
+            "achat_spot": _f(r.get("achat_spot_24h")), "achat_perp": _f(r.get("achat_perp_24h")),
+            "ls_comptes": _f(r.get("ls_comptes")),
             "meteo": meteo,
         })
     if lignes:

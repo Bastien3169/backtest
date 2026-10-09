@@ -716,6 +716,21 @@ COLONNES = {
              "La version live du volume relatif. Disponible après 3 jours "
              "d'historique.",
     ),
+    "achat_spot_24h": st.column_config.NumberColumn(
+        "Achat agressif spot", format="%.0f %%",
+        help="Part du volume spot Binance des 24 dernières heures faite par des "
+             "ACHATS AU PRIX DU MARCHÉ (acheteurs pressés). 50 % = équilibre ; "
+             "au-dessus, les acheteurs sont plus pressés que les vendeurs ; en "
+             "dessous, l'inverse. Ne compte qu'aux extrêmes (≥ 58 % ou ≤ 42 %) : "
+             "entre les deux, c'est du bruit. Utile surtout pour un 🟢 : OI qui monte, "
+             "prix plat ET acheteurs pressés en spot = penche vers le haut. "
+             "Vide = actif non coté en spot sur Binance. Pas encore validé par le journal.",
+    ),
+    # achat_perp_24h et ls_comptes : chargés et enregistrés dans le journal
+    # (src/utils/flux_binance.py) mais PAS affichés. Le flux perp est faussé
+    # par les liquidations (une vague de shorts liquidés ressemble à des achats
+    # pressés), le ratio de comptes compte des têtes, pas de l'argent. À
+    # réafficher seulement si le journal montre qu'ils prédisent quelque chose.
     "volume_hl_m": st.column_config.NumberColumn(
         "Vol. HL", format="%.1f M$",
         help="Volume notionnel 24 h sur Hyperliquid — le marché où tes ordres "
@@ -773,7 +788,7 @@ COLONNES = {
 
 VUES = {
     "Radar": ["symbol", "etat", "closes", "px_chg_24h", "amplitude_med", "atr_pct",
-              "compression", "rsi_14", "volume_rel", "vol_hl_rel",
+              "compression", "rsi_14", "volume_rel", "vol_hl_rel", "achat_spot_24h",
               "oi_chg_4h", "oi_chg_24h", "oi_chg_7d", "oi_z_4h", "oi_z", "oi_z_7d",
               "funding_annuel", "oi_m"],
     "Tendance & risque": ["symbol", "name", "closes", "perf_7d",
