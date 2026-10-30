@@ -579,6 +579,35 @@ class HyperliquidClient:
             })
         return positions
 
+    def get_closing_fills(self, asset: str, depuis_ms: int) -> list:
+        """
+        Exécutions de CLÔTURE sur `asset` depuis `depuis_ms` (ms epoch UTC),
+        lues sur Hyperliquid (userFillsByTime). Sert à connaître le VRAI prix
+        de sortie et le PnL réalisé quand un TP/SL natif a fermé la position.
+
+        Chaque élément : {px, sz, closed_pnl, fee, time}. closed_pnl est le PnL
+        brut calculé par HL (hors frais), fee les frais de l'exécution.
+        Lève une exception si l'API est injoignable (comme get_open_positions).
+        """
+        asset = (asset or "").replace("-USD", "").replace("USDT", "")
+        raw = self._post_info({"type": "userFillsByTime", "user": self.address,
+                               "startTime": int(depuis_ms), "aggregateByTime": True})
+        fills = []
+        for f in raw if isinstance(raw, list) else []:
+            if f.get("coin") != asset or not str(f.get("dir", "")).startswith("Close"):
+                continue
+            try:
+                fills.append({
+                    "px":         float(f["px"]),
+                    "sz":         float(f["sz"]),
+                    "closed_pnl": float(f.get("closedPnl") or 0),
+                    "fee":        float(f.get("fee") or 0),
+                    "time":       int(f.get("time") or 0),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        return fills
+
     def get_position(self, asset: str) -> dict | None:
         """
         Position reelle sur un symbole precis, ou None si aucune.

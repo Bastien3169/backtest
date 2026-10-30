@@ -97,6 +97,7 @@ from datetime import datetime, timezone, timedelta
 # ---------------------------------------------------------------------------
 from src.utils import bot_state as _bs
 from src.utils.hyperliquid_client import HyperliquidClient
+from src.utils import alertes as _alertes   # e-mails Resend (entrées, sorties, SL)
 from src.controllers.indicators import apply_all_indicators
 from src.controllers.backtest import _build_signal
 
@@ -126,6 +127,13 @@ print(f"{BOT_PREFIX} Fichier JSON : {_bs.STATE_FILE}")
 get_state  = _bs.get_state
 save_state = _bs.save_state
 log        = _bs.log
+
+
+def _memoriser(cle, valeur):
+    """Écrit UN champ dans le JSON tout de suite, sans écraser le reste (cf. FIX 2)."""
+    fresh = get_state()
+    fresh[cle] = valeur
+    save_state(fresh)
 
 # ---------------------------------------------------------------------------
 # FIX 4 — Plafond de sécurité sur le levier
@@ -273,6 +281,24 @@ def run():
                     _pnl_usd = (round(_qty * _last_price - _notional, 2)
                                 if not _pos_json.get("is_short")
                                 else round(_notional - _qty * _last_price, 2))
+                    # Vrai prix de sortie et vrai PnL : lus sur HL (source de vérité),
+                    # pas recalculés depuis le dernier prix vu par le bot.
+                    _frais, _estime = None, True
+                    try:
+                        _t0 = (datetime.fromisoformat(_pos_json["ts"]).timestamp()
+                               if _pos_json.get("ts") else time.time() - 30 * 86400)
+                        _fills = client.get_closing_fills(_pos_json.get("symbol", _symbol_now),
+                                                          int((_t0 - 60) * 1000))
+                        _sz = sum(f["sz"] for f in _fills)
+                        if _sz > 0:
+                            _last_price = sum(f["px"] * f["sz"] for f in _fills) / _sz
+                            _pnl_usd    = round(sum(f["closed_pnl"] for f in _fills), 2)
+                            _pnl_pct    = _pnl_usd / _notional * 100 if _notional else _pnl_pct
+                            _frais      = round(sum(f["fee"] for f in _fills), 2)
+                            _estime     = False
+                    except Exception as e:
+                        log(f"{BOT_PREFIX} ⚠️ Lecture des exécutions HL impossible ({e}) — "
+                            f"PnL estimé depuis le dernier prix", max_logs=5000)
                     state["trades"].append({
                         "ts": datetime.now().isoformat(),
                         "symbol": _pos_json.get("symbol", _symbol_now),
@@ -288,6 +314,11 @@ def run():
                     state["position"] = None
                     save_state(state)
                     state = get_state()
+                    _alertes.bot_sortie(BOT_PREFIX, _pos_json.get("side"),
+                                        _pos_json.get("symbol", _symbol_now),
+                                        _entry, _last_price, _pnl_usd, _pnl_pct,
+                                        "TP/SL natif ou clôture manuelle",
+                                        frais=_frais, estime=_estime)
 
                 # Cas 2 — HL dit OUVERT : le JSON s'aligne sur les chiffres de HL
                 elif _pos_hl is not None:
@@ -306,12 +337,20 @@ def run():
                         # non protégée : la logique FIX 1 lui posera un SL/TP natif.
                         "protected":   _ancien.get("protected", False) if _ancien else False,
                         "adoptee_hl":  (not _ancien) or _ancien.get("adoptee_hl", False),
+                        # e-mail "sans SL" déjà envoyé → pas un nouveau à chaque cycle
+                        "alerte_non_protegee": _ancien.get("alerte_non_protegee", False),
                     }
 
                     if not _ancien:
                         log(f"{BOT_PREFIX} 📥 Position {_nouveau['side']} {_nouveau['symbol']} "
                             f"présente sur HL mais non suivie par le bot — ADOPTÉE "
                             f"({_nouveau['qty']} @ {_nouveau['entry_price']:.4f})", max_logs=5000)
+                        _alertes.bot_entree(BOT_PREFIX, _nouveau["side"], _nouveau["symbol"],
+                                            _nouveau["entry_price"], _nouveau["size_usdt"],
+                                            _nouveau["margin_usdt"], _nouveau["leverage"],
+                                            protection="Le bot pose son TP/SL natif à ce cycle "
+                                                       "(e-mail 🚨 séparé si ça échoue)",
+                                            adoptee=True)
                     elif (abs(_ancien.get("qty", 0) - _nouveau["qty"]) > 1e-9
                           or abs((_ancien.get("entry_price") or 0) - _nouveau["entry_price"]) > 1e-9):
                         log(f"{BOT_PREFIX} 🔁 Position {_nouveau['symbol']} modifiée hors bot — "
@@ -321,6 +360,9 @@ def run():
                             log(f"{BOT_PREFIX} ⚠️ La taille a changé : les TP/SL natifs déjà posés "
                                 f"ne couvrent que l'ANCIENNE quantité ({_ancien.get('qty')}). "
                                 f"Vérifier/compléter la protection sur HL.", max_logs=5000)
+                            _alertes.bot_alerte(BOT_PREFIX, f"Taille de {_nouveau['symbol']} modifiée hors bot",
+                                f"La position est passée de {_ancien.get('qty')} à {_nouveau['qty']}. "
+                                f"Les TP/SL déjà posés ne couvrent que l'ancienne quantité.")
 
                     state["position"] = _nouveau
                     save_state(state)
@@ -368,6 +410,17 @@ def run():
                     f"≤ seuil -{max_loss_usd:.2f}$ ({max_loss_pct:.0f}% du capital) — "
                     f"nouvelles entrées bloquées, positions existantes toujours gérées", max_logs=5000)
 
+            # E-mail une seule fois au déclenchement, pas à chaque cycle
+            if kill_switch_active and not state.get("alerte_kill_switch"):
+                _alertes.bot_alerte(BOT_PREFIX, "Kill switch déclenché — plus de nouvelles entrées",
+                    f"Perte de session {pnl_session_now:+.2f} $ ≤ seuil -{max_loss_usd:.2f} $ "
+                    f"({max_loss_pct:.0f} % du capital). Les positions ouvertes restent gérées.")
+                state["alerte_kill_switch"] = True
+                _memoriser("alerte_kill_switch", True)
+            elif not kill_switch_active and state.get("alerte_kill_switch"):
+                state["alerte_kill_switch"] = False
+                _memoriser("alerte_kill_switch", False)
+
             # FIX 1 — si une position ouverte précédemment n'a pas pu être protégée
             # (SL natif + fermeture d'urgence tous deux échoués au cycle précédent),
             # on retente de poser le SL/TP natif à chaque cycle tant que ce n'est pas résolu.
@@ -386,9 +439,18 @@ def run():
                     if _retry.get("sl_ok", False) or not _sl_native:
                         state["position"]["protected"] = True
                         log(f"{BOT_PREFIX} 🛡️ SL/TP natif reposé avec succès — position de nouveau protégée", max_logs=5000)
+                        if state["position"].pop("alerte_non_protegee", False):
+                            _alertes.bot_alerte(BOT_PREFIX, f"{_p['symbol']} de nouveau protégée",
+                                "Le SL/TP natif a finalement pu être posé. Plus d'action requise.",
+                                emoji="🛡️")
                     else:
                         log(f"{BOT_PREFIX} ❌ Nouvelle tentative de pose du SL échouée — "
                             f"INTERVENTION MANUELLE TOUJOURS REQUISE", max_logs=5000)
+                        if not _p.get("alerte_non_protegee"):
+                            _alertes.bot_alerte(BOT_PREFIX, f"{_p['side']} {_p['symbol']} SANS STOP LOSS",
+                                f"Position {_p['qty']} @ {_p['entry_price']} sans SL natif : la pose a échoué. "
+                                f"Le bot retente à chaque cycle, mais pose le SL toi-même sur HL.")
+                            state["position"]["alerte_non_protegee"] = True
 
             # ── 2. Bougies HL ──────────────────────────────────────────────
             df = client.get_klines(symbol, timeframe, limit=300)
@@ -485,6 +547,7 @@ def run():
                         # ── TP/SL natifs HL — protection temps réel ────────
                         tp_price_native = fill * (1 + tp_pct / 100) if tp_pct and not is_short else (fill * (1 - tp_pct / 100) if tp_pct else None)
                         sl_price_native = fill * (1 - sl_pct / 100) if sl_pct and not is_short else (fill * (1 + sl_pct / 100) if sl_pct else None)
+                        _protection, _protege = "Aucun TP/SL configuré", True
                         if tp_price_native or sl_price_native:
                             tpsl_res = client.set_tp_sl(
                                 asset=symbol,
@@ -499,7 +562,8 @@ def run():
                             if tp_ok and sl_ok:
                                 state["position"]["protected"] = True
                                 log(f"{BOT_PREFIX} 🛡️ TP/SL natifs posés sur HL — "
-                                    f"TP: {tp_price_native:.0f}$ | SL: {sl_price_native:.0f}$", max_logs=5000)
+                                    f"TP: {_alertes._prix(tp_price_native)}$ | SL: {_alertes._prix(sl_price_native)}$", max_logs=5000)
+                                _protection = "🛡️ TP/SL natifs posés sur Hyperliquid"
                             elif not sl_ok:
                                 # SL échoué = pas de protection → fermeture d'urgence
                                 log(f"{BOT_PREFIX} 🚨 SL natif échoué — fermeture d'urgence de la position !", max_logs=5000)
@@ -518,10 +582,27 @@ def run():
                                         f"'non protégée', nouvelle tentative de pose du SL au prochain cycle",
                                         max_logs=5000)
                                     state["position"]["protected"] = False
+                                    state["position"]["alerte_non_protegee"] = True
+                                    _protection = ("🚨 SL impossible à poser ET fermeture d'urgence "
+                                                   "échouée — INTERVENTION MANUELLE")
+                                    _protege = False
                             else:
                                 # TP échoué mais SL OK → on garde la position, juste un warning
                                 state["position"]["protected"] = True
                                 log(f"{BOT_PREFIX} ⚠️ TP natif échoué mais SL OK — position gardée sans TP automatique", max_logs=5000)
+                                _protection = "⚠️ SL posé, mais TP natif échoué : pas de prise de profit automatique"
+
+                        # ── E-mail d'entrée, une fois la protection connue ──
+                        if state["position"] is None:
+                            _alertes.bot_alerte(BOT_PREFIX,
+                                f"{'SHORT' if is_short else 'LONG'} {symbol} ouvert puis fermé en urgence",
+                                f"Ouvert @ {fill} mais le stop loss n'a pas pu être posé : le bot a "
+                                f"refermé la position aussitôt. Aucune position ouverte.")
+                        else:
+                            _alertes.bot_entree(BOT_PREFIX, "LONG" if not is_short else "SHORT", symbol,
+                                                fill, notional, size_usd, leverage,
+                                                tp=tp_price_native, sl=sl_price_native,
+                                                protection=_protection, protege=_protege)
                     else:
                         # FIX 6 — on remonte le motif renvoyé par HL, pas un crash interne
                         motif = (res or {}).get("error") or (res or {}).get("message") or res
@@ -577,8 +658,13 @@ def run():
                         state["position"]    = None
                         log(f"{BOT_PREFIX} 🔴 Fermé ({exit_reason}) @ {fill:.2f} | "
                             f"PnL: {pnl_usd:+.2f}$ ({pnl_pct:+.2f}%)", max_logs=5000)
+                        _alertes.bot_sortie(BOT_PREFIX, pos["side"], symbol, entry, fill,
+                                            pnl_usd, pnl_pct, exit_reason)
                     else:
                         log(f"{BOT_PREFIX} ❌ Clôture échouée : {res}", max_logs=5000)
+                        _alertes.bot_alerte(BOT_PREFIX, f"Clôture {exit_reason} de {symbol} échouée",
+                            f"Le bot a voulu fermer la position mais Hyperliquid a refusé : {res}. "
+                            f"La position est toujours ouverte.")
 
             # ── Sauvegarder la date du check uniquement si on a vraiment vérifié ─
             # (pas en first_run pour ne pas bloquer le lendemain après un restart)

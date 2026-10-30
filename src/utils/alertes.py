@@ -1,6 +1,7 @@
 """
 src/utils/alertes.py
-Alertes par e-mail : nouvel inscrit à valider, signaux radar du jour.
+Alertes par e-mail : nouvel inscrit à valider, signaux radar du jour,
+entrées / sorties de position des bots et problèmes de protection (SL).
 
 Pourquoi Resend et pas Gmail en SMTP
 ------------------------------------
@@ -251,3 +252,89 @@ def _bilan_html(trans, jour) -> str:
               + "<p style='color:#888'>Pour 🟢, « rendement » = ampleur du mouvement quel que "
                 "soit son sens. Moins de ~30 signaux mesurés = pas encore significatif.</p>")
     return h
+
+
+# ---------------------------------------------------------------------------
+# Bots de trading (bot_mainnet.py) — entrées, sorties, alertes de protection
+# ---------------------------------------------------------------------------
+# Envoi en arrière-plan : un e-mail lent ne doit jamais retarder un ordre
+# (la pose du SL suit l'entrée de quelques millisecondes).
+
+def _prix(v) -> str:
+    """Prix lisible quel que soit l'actif : 95 000 pour BTC, 0,00001234 pour PEPE."""
+    import math
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if v != v or v == 0:
+        return "—" if v != v else "0"
+    if abs(v) >= 1000:
+        return f"{v:,.0f}".replace(",", " ")
+    dec = min(10, max(2, 4 - int(math.floor(math.log10(abs(v))))))
+    return f"{v:.{dec}f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def _nom_bot(prefixe: str) -> str:
+    return str(prefixe).strip("[]") or "BOT"
+
+
+def _fiche(lignes: list[tuple[str, str]]) -> str:
+    tr = "".join(f"<tr><td style='color:#888'>{html.escape(k)}</td><td><b>{v}</b></td></tr>"
+                 for k, v in lignes)
+    return f"{_TABLE}{tr}</table>"
+
+
+def bot_entree(prefixe, side, symbol, prix, notional, marge, levier,
+               tp=None, sl=None, protection="", protege=True, adoptee=False) -> None:
+    """Position ouverte par le bot, ou trouvée sur HL et adoptée."""
+    bot, sym = _nom_bot(prefixe), html.escape(str(symbol))
+    if not protege:
+        sujet = f"🚨 [{bot}] {side} {symbol} ouvert SANS STOP — intervention requise"
+    elif adoptee:
+        sujet = f"📥 [{bot}] Position {side} {symbol} adoptée @ {_prix(prix)}"
+    else:
+        sujet = f"🟢 [{bot}] {side} {symbol} ouvert @ {_prix(prix)}"
+    lignes = [("Bot", html.escape(bot)), ("Actif", sym), ("Sens", html.escape(str(side))),
+              ("Prix d'entrée", _prix(prix)), ("Taille (notional)", _n(notional, "{:.2f} $"))]
+    if marge:
+        lignes.append(("Marge engagée", _n(marge, "{:.2f} $") + f" (x{levier})"))
+    lignes += [("Take profit", _prix(tp) if tp else "aucun"),
+               ("Stop loss", _prix(sl) if sl else "aucun")]
+    if protection:
+        lignes.append(("Protection", html.escape(protection)))
+    note = ("<p>Position présente sur Hyperliquid mais pas ouverte par le bot "
+            "(ouverture manuelle ?). Le bot la gère désormais.</p>") if adoptee else ""
+    envoyer_en_fond(sujet, note + _fiche(lignes) + _lien_app("Ouvrir le Bot Live"))
+
+
+def bot_sortie(prefixe, side, symbol, entree, sortie, pnl_usd, pnl_pct, raison,
+               frais=None, estime=False) -> None:
+    """Position fermée (par le bot ou par un TP/SL natif côté HL)."""
+    bot = _nom_bot(prefixe)
+    try:
+        gagnant = float(pnl_usd) >= 0
+    except (TypeError, ValueError):
+        gagnant = True
+    sujet = (f"{'✅' if gagnant else '🔴'} [{bot}] {side} {symbol} fermé "
+             f"({raison}) : {_n(pnl_usd, '{:+.2f} $')} ({_n(pnl_pct, '{:+.2f} %')})")
+    lignes = [("Bot", html.escape(bot)), ("Actif", html.escape(str(symbol))),
+              ("Sens", html.escape(str(side))), ("Raison", html.escape(str(raison))),
+              ("Prix d'entrée", _prix(entree)), ("Prix de sortie", _prix(sortie)),
+              ("PnL", f"{_n(pnl_usd, '{:+.2f} $')} ({_n(pnl_pct, '{:+.2f} %')})")]
+    if frais:
+        lignes.append(("Frais de clôture", _n(frais, "{:.2f} $")))
+    note = ("<p style='color:#c60'>⚠️ Exécution introuvable sur Hyperliquid : prix de sortie "
+            "et PnL <b>estimés</b> à partir du dernier prix vu par le bot. "
+            "Vérifie sur hyperliquid.xyz.</p>") if estime else ""
+    envoyer_en_fond(sujet, _fiche(lignes) + note + _lien_app("Ouvrir le Bot Live"))
+
+
+def bot_alerte(prefixe, titre: str, message: str, emoji: str = "🚨") -> None:
+    """Problème de protection ou d'exécution qui demande ton attention."""
+    bot = _nom_bot(prefixe)
+    envoyer_en_fond(f"{emoji} [{bot}] {titre}",
+                    f"<p><b>{html.escape(titre)}</b></p><p>{html.escape(message)}</p>"
+                    "<p>Vérifie la position et ses ordres sur hyperliquid.xyz.</p>"
+                    + _lien_app("Ouvrir le Bot Live"))
+
