@@ -31,6 +31,16 @@ JOURS_HISTORIQUE = 90
 # l'amplitude, qui ont toujours été calculés sur un mois.
 FENETRE_RISQUE = 30
 
+# Profondeur de la TENDANCE LONGUE (MM100/MM200, % de jours sous la MM100,
+# perf 1 an, pire rebond). La colonne « closes » reste à JOURS_HISTORIQUE :
+# sparkline 90 j et perf personnalisée gardent exactement leur sens.
+JOURS_TENDANCE = 365
+MM_TENDANCE = 100
+JOURS_PENTE_MM = 20        # pente de la MM100 mesurée sur les 20 derniers jours
+# Téléchargé : 1,5 an, pour la courbe « 1,5 an » de la page. Les métriques de
+# tendance restent sur JOURS_TENDANCE.
+JOURS_TELECHARGES = 548
+
 HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 
 
@@ -235,6 +245,45 @@ def _rsi(df: pd.DataFrame, periode: int = 14) -> float | None:
     return round(100 - 100 / (1 + rs), 1)
 
 
+def _tendance_longue(closes: pd.Series, jours: int = JOURS_TENDANCE) -> dict:
+    """La tendance longue, telle qu'on la lit sur un graphe.
+
+      - perf_1an      : variation sur la fenêtre (1 an, ou depuis le listing)
+      - pct_sous_mm   : % des jours où la clôture était SOUS la MM100.
+                        95 = le prix n'est presque jamais repassé au-dessus
+                        (la « ligne rouge » d'un short) ; 5 = l'inverse (long)
+      - pire_rebond   : pire mouvement CONTRE la tendance, en % — plus fort
+                        rebond depuis un plus bas si baisse, pire chute depuis
+                        un plus haut si hausse. C'est ce que le stop doit tenir.
+      - pente_mm100   : pente ACTUELLE de la MM100, en % par mois, mesurée sur
+                        20 jours. Perf 1 an et % de jours disent ce qui s'est
+                        passé ; la pente dit si ça continue maintenant.
+
+    Le % de jours n'est compté que là où la MM100 existe : il faut au moins
+    60 jours de MM, donc 160 jours de cotation, sinon None.
+    """
+    vide = {"perf_1an": None, "pct_sous_mm": None, "pire_rebond": None, "pente_mm100": None}
+    serie = closes.dropna()
+    serie = serie[serie > 0].tail(jours)
+    if len(serie) < MM_TENDANCE + 60:
+        return vide
+    mm = serie.rolling(MM_TENDANCE).mean()
+    valides = mm.notna()
+    pct_sous = float((serie[valides] < mm[valides]).mean() * 100)
+    perf = float(serie.iloc[-1] / serie.iloc[0] - 1) * 100
+    if perf < 0:
+        rebond = (serie / serie.cummin() - 1).max()
+    else:
+        rebond = (1 - serie / serie.cummax()).max()
+    pente = (float(mm.iloc[-1] / mm.iloc[-1 - JOURS_PENTE_MM]) - 1) * 100 * 30 / JOURS_PENTE_MM
+    return {
+        "pente_mm100": round(pente, 1),
+        "perf_1an":    round(perf, 1),
+        "pct_sous_mm": round(pct_sous, 1),
+        "pire_rebond": round(float(rebond) * 100, 1),
+    }
+
+
 def _rendements(serie: pd.Series, jours: int = FENETRE_RISQUE) -> pd.Series:
     return serie.tail(jours + 1).pct_change().dropna()
 
@@ -363,12 +412,14 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
         if progress_cb:
             progress_cb((idx + 1) / total, f"Chargement {coin['symbol']}...")
 
-        ohlcv = _fetch_ohlcv(coin["ticker"])
+        # Une seule requête pour 365 j ; tout ce qui suit tranche sa propre fenêtre.
+        ohlcv = _fetch_ohlcv(coin["ticker"], JOURS_TELECHARGES)
         if ohlcv is None:
             ecartes.append(coin["symbol"] + " (aucune donnée)")
             continue
 
-        closes  = ohlcv["Close"]
+        closes_long = ohlcv["Close"]
+        closes  = closes_long.tail(JOURS_HISTORIQUE)
         volumes = ohlcv["Volume"] if "Volume" in ohlcv.columns else None
 
         if _serie_morte(closes, volumes):
@@ -421,6 +472,10 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             # Série complète : permet à la page de tracer la sparkline et de
             # recalculer une perf sur N jours sans relancer le chargement.
             "closes":         [float(v) for v in closes.dropna().tolist()],
+            **_tendance_longue(closes_long),
+            # 1,5 an en journalier : MM100/MM200 de l'entonnoir et courbe à
+            # période réglable de la page.
+            "closes_long":    [float(v) for v in closes_long.dropna().tolist()],
         })
 
     df = pd.DataFrame(rows)

@@ -515,13 +515,38 @@ with _cp1:
     )
 with _cp2:
     _vue = st.radio(
-        "Colonnes affichées", ["Radar", "Tout", "Tendance & risque"], horizontal=True,
+        "Colonnes affichées", ["Radar", "Tout", "Tendance & risque", "Tendance longue"], horizontal=True,
         key="scr_vue",
         help="Radar : les signaux de flux (OI, volume, funding, état) — par défaut. "
              "Tout : toutes les colonnes. "
-             "Tendance & risque : le screening d'origine, sans le radar.",
+             "Tendance & risque : le screening d'origine, sans le radar. "
+             "Tendance longue : 1 an, MM100, pire rebond.",
     )
 df["perf_custom"] = df["closes"].apply(lambda c: perf_sur(pd.Series(c), int(_n_jours)))
+
+# 3 courbes à période réglable (vue « Tendance longue »), recalculées sans rechargement
+_PERIODES = {"1 mois": 30, "3 mois": 90, "6 mois": 180, "1 an": 365, "1,5 an": 548}
+_periodes = ["3 mois", "6 mois", "1 an"]
+if _vue == "Tendance longue":
+    _pc = st.columns(3)
+    _periodes = [
+        _pc[i].selectbox(f"Courbe {i + 1}", list(_PERIODES), index=list(_PERIODES).index(_d),
+                         key=f"scr_courbe_{i}",
+                         help="Un actif listé depuis moins longtemps montre tout son historique.")
+        for i, _d in enumerate(_periodes)
+    ]
+
+
+def _courbe(longue, courte, jours: int):
+    serie = longue if isinstance(longue, list) and longue else (courte or [])
+    serie = serie[-jours:]
+    # Au-delà de 6 mois, un point par semaine : même forme, tableau plus léger.
+    return serie[::-1][::7][::-1] if jours > 180 else serie
+
+
+_src_long = df["closes_long"] if "closes_long" in df.columns else pd.Series([None] * len(df), index=df.index)
+for _i, _per in enumerate(_periodes):
+    df[f"courbe_{_i + 1}"] = [_courbe(l, c, _PERIODES[_per]) for l, c in zip(_src_long, df["closes"])]
 
 # ---------------------------------------------------------------------------
 # Filtres
@@ -535,6 +560,12 @@ PRESETS = {
     "Calme et profond": {
         "perf_7d_min": -100.0, "amplitude_min": 0.0, "volume_min": 50.0,
         "position_min": 0, "funding_max": 20.0,
+    },
+    "Baisse longue sous MM100": {
+        "tendance": "Baissière", "pct_cote_min": 80, "rebond_max": 60.0,
+    },
+    "Hausse longue sur MM100": {
+        "tendance": "Haussière", "pct_cote_min": 80, "rebond_max": 40.0,
     },
     "Signaux radar": {
         "etats": [R.ETATS[k] for k in ("demarrage", "accumulation", "squeeze", "shorts")],
@@ -577,6 +608,60 @@ with st.expander("🔧 Filtres", expanded=True):
             help="Vide = tous les états. Voir l'onglet « Les états » du guide.",
         )
 
+    _TENDANCES = ["Indifférente", "Baissière", "Haussière"]
+    _LIB_TEND  = {"Indifférente": "Aucune", "Baissière": "📉 Baissière (short)",
+                  "Haussière": "📈 Haussière (long)"}
+    st.markdown("**Tendance longue** (1 an ou depuis le listing)")
+    tendance = st.radio(
+        "Je cherche une tendance", _TENDANCES, horizontal=True,
+        index=_TENDANCES.index(_p.get("tendance", "Indifférente")),
+        format_func=_LIB_TEND.get, key=f"scr_tend_{_preset}",
+    )
+    t2, t3 = st.columns(2)
+    with t2:
+        pct_cote_min = st.slider(
+            "% de jours du bon côté de la MM100, minimum", 0, 100,
+            int(_p.get("pct_cote_min", 80)), 5, key=f"scr_pctmm_{_preset}",
+            help="Baissière : % de jours où le prix a clôturé SOUS la MM100. "
+                 "Haussière : AU-DESSUS. 90 = il n'a presque jamais franchi la ligne.",
+        )
+    with t3:
+        rebond_max = st.number_input(
+            "Pire rebond contre la tendance, maximum (%)", 0.0, 500.0,
+            float(_p.get("rebond_max", 60.0)), 5.0, key=f"scr_rebond_{_preset}",
+            help="Ce qu'un short (ou un long) aurait dû encaisser sans être stoppé. "
+                 "Avec un levier ×L, un rebond de 100/L % liquide.",
+        )
+
+    if tendance != "Indifférente":
+        # Exemples fixes passés dans les MÊMES règles que le filtre ci-dessous :
+        # la dernière colonne suit le sens et les seuils choisis.
+        _ex = pd.DataFrame([
+            {"Profil": "Type FOGO",            "Perf 1 an": -97, "% jours < MM100": 100, "Pente MM100": -40, "Pire rebond": 25},
+            {"Profil": "Type Mnt russe",       "Perf 1 an": -65, "% jours < MM100": 70,  "Pente MM100": -10, "Pire rebond": 103},
+            {"Profil": "Type hausse régulière", "Perf 1 an": 324, "% jours < MM100": 1,   "Pente MM100": 7,   "Pire rebond": 21},
+        ])
+        _b = tendance == "Baissière"
+        _ok = (((_ex["Perf 1 an"] < 0) if _b else (_ex["Perf 1 an"] > 0))
+               & ((_ex["% jours < MM100"] if _b else 100 - _ex["% jours < MM100"]) >= pct_cote_min)
+               & ((_ex["Pente MM100"] < 0) if _b else (_ex["Pente MM100"] > 0))
+               & (_ex["Pire rebond"] <= rebond_max))
+        _ex["Retenu / écarté"] = _ok.map({True: "Retenu", False: "Écarté"})
+        _sty = _ex.style
+        _sty = getattr(_sty, "map", None) or _sty.applymap   # pandas < 2.1 : applymap
+        _sty = _sty(lambda v: "color: #2e9e5b; font-weight: 600" if v == "Retenu"
+                    else "color: #d64545; font-weight: 600", subset=["Retenu / écarté"])
+        st.caption("Exemples : ce que ces réglages gardent ou écartent.")
+        st.dataframe(
+            _sty, hide_index=True,
+            column_config={
+                "Perf 1 an": st.column_config.NumberColumn(format="%+d %%"),
+                "% jours < MM100": st.column_config.NumberColumn(format="%d %%"),
+                "Pente MM100": st.column_config.NumberColumn(format="%+d %%/mois"),
+                "Pire rebond": st.column_config.NumberColumn(format="%d %%"),
+            },
+        )
+
 # Un filtre ne doit jamais écarter une ligne parce que la donnée est absente :
 # fillna avec la valeur qui laisse passer.
 masque = (
@@ -588,6 +673,22 @@ masque = (
 )
 if etats_choisis:
     masque &= df["etat"].isin(etats_choisis)
+if tendance != "Indifférente":
+    # Exception assumée à la règle du fillna : sans 160 j de cotation, pas de
+    # tendance longue — l'actif ne doit pas passer ce filtre par défaut.
+    for _c in ("perf_1an", "pct_sous_mm", "pire_rebond", "pente_mm100"):
+        if _c not in df.columns:
+            df[_c] = None
+    _perf = pd.to_numeric(df["perf_1an"], errors="coerce")
+    _sous = pd.to_numeric(df["pct_sous_mm"], errors="coerce")
+    _cote = _sous if tendance == "Baissière" else 100 - _sous
+    masque &= (
+        ((_perf < 0) if tendance == "Baissière" else (_perf > 0)) &
+        (_cote >= pct_cote_min) &
+        # La tendance doit être EN COURS : MM100 qui va encore dans le bon sens
+        ((pd.to_numeric(df["pente_mm100"], errors="coerce") * (-1 if tendance == "Baissière" else 1)) > 0) &
+        (pd.to_numeric(df["pire_rebond"], errors="coerce") <= rebond_max)
+    )
 df_filtre = df[masque].copy()
 
 if df_filtre.empty:
@@ -599,6 +700,10 @@ if _vue == "Radar":
     df_filtre["_ordre"] = df_filtre["etat"].map(R.ORDRE_ETATS).fillna(99)
     df_filtre["_force"] = df_filtre["oi_z"].abs().fillna(df_filtre["oi_chg_24h"].abs() / 10)
     df_filtre = df_filtre.sort_values(["_ordre", "_force"], ascending=[True, False],
+                                      na_position="last")
+elif tendance != "Indifférente":
+    _asc = tendance == "Haussière"   # le plus souvent du bon côté de la MM100 d'abord
+    df_filtre = df_filtre.sort_values(["pct_sous_mm", "perf_1an"], ascending=[not _asc, _asc],
                                       na_position="last")
 else:
     df_filtre = df_filtre.sort_values("perf_7d", ascending=False, na_position="last")
@@ -786,6 +891,36 @@ COLONNES = {
     ),
 }
 
+COLONNES.update({
+    **{f"courbe_{_i + 1}": st.column_config.LineChartColumn(
+        _per, width="small", color="auto",
+        help="Clôtures sur la période choisie au-dessus du tableau (journalières "
+             "jusqu'à 6 mois, hebdomadaires au-delà). Forme seule, pas l'échelle : "
+             "chaque courbe est normalisée sur son propre range.",
+    ) for _i, _per in enumerate(_periodes)},
+    "pente_mm100": st.column_config.NumberColumn(
+        "Pente MM100", format="%+.1f %%/mois",
+        help="Pente ACTUELLE de la MM100 (mesurée sur 20 jours), en % par mois. "
+             "Perf 1 an et % de jours disent ce qui s'est passé ; la pente dit si "
+             "la tendance continue maintenant. Le filtre exige qu'elle aille dans "
+             "le sens cherché.",
+    ),
+    "perf_1an": st.column_config.NumberColumn(
+        "Perf 1 an", format="%+.0f %%",
+        help="Variation sur 1 an, ou depuis le listing si l'actif est plus récent.",
+    ),
+    "pct_sous_mm": st.column_config.ProgressColumn(
+        "% jours < MM100", min_value=0, max_value=100, format="%.0f %%",
+        help="Part des jours où le prix a clôturé SOUS sa MM100. ~100 = baisse qui "
+             "ne repasse jamais la ligne ; ~0 = hausse qui ne la perd jamais.",
+    ),
+    "pire_rebond": st.column_config.NumberColumn(
+        "Pire rebond", format="%.0f %%",
+        help="Pire mouvement contre la tendance sur la fenêtre. Ton stop (et ton "
+             "levier) devaient tenir ça pour rester dans le trade.",
+    ),
+})
+
 VUES = {
     "Radar": ["symbol", "etat", "closes", "px_chg_24h", "amplitude_med", "atr_pct",
               "compression", "rsi_14", "volume_rel", "vol_hl_rel", "achat_spot_24h",
@@ -794,6 +929,8 @@ VUES = {
     "Tendance & risque": ["symbol", "name", "closes", "perf_7d",
                           "perf_custom", "perf_30d", "position_range", "amplitude_med", "atr_pct", "beta",
                           "corr_btc", "volume_m", "volume_rel", "volume_hl_m", "oi_m", "funding_annuel"],
+    "Tendance longue": ["symbol", "courbe_1", "courbe_2", "courbe_3", "perf_1an", "pct_sous_mm",
+                        "pente_mm100", "pire_rebond", "funding_annuel", "oi_z"],
 }
 VUES["Tout"] = list(COLONNES)
 _cols = VUES[_vue]
@@ -811,11 +948,11 @@ for _c in _cols:
 # parmi eux compressions les plus basses).
 # ---------------------------------------------------------------------------
 _AUCUNE   = "—"
-_NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes")]
+_NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes", "courbe_1", "courbe_2", "courbe_3")]
 _libelle  = lambda c: c if c == _AUCUNE else (COLONNES.get(c, {}) or {}).get("label") or c
 _SENS     = {"↓ du plus fort au plus faible": False, "↑ du plus faible au plus fort": True}
 _MODES    = ["Garder les N premiers", "Seuil"]
-_MM_CHOIX = [_AUCUNE, 10, 20, 30, 50]       # 90 j de bougies chargés : pas de MM100/200
+_MM_CHOIX = [_AUCUNE, 10, 20, 30, 50, 100, 200]   # MM100/200 : calculées sur closes_long (1 an)
 _MM_PRIX  = ["Prix indifférent", "Prix au-dessus", "Prix en dessous"]
 _MM_PENTE = ["Pente indifférente", "MM qui monte", "MM qui baisse", "MM plate"]
 _MM_RECUL = 5                               # pente mesurée sur 5 jours, comme la météo
@@ -880,7 +1017,10 @@ with st.expander("🔻 Entonnoir de tri", expanded=False):
 
 _n_avant = len(df_filtre)
 for _n, _px, _pt in _conds_mm:
-    _etats = df_filtre["closes"].apply(lambda c: _mm_etat(c, _n))
+    # closes_long (1 an) si dispo ; sinon closes (90 j) → MM100/200 écartent l'actif.
+    _src = (df_filtre["closes_long"].where(df_filtre["closes_long"].notna(), df_filtre["closes"])
+            if "closes_long" in df_filtre.columns else df_filtre["closes"])
+    _etats = _src.apply(lambda c: _mm_etat(c, _n))
     _garde = _etats.notna()                   # historique trop court → écarté
     if _px == _MM_PRIX[1]:
         _garde &= _etats.apply(lambda e: e is not None and e[0])
