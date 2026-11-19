@@ -38,8 +38,7 @@ st.caption("Ce qui marche et ce qui ne marche pas — sur le passé (backtest) e
 
 VERT, ROUGE, ORANGE = "#2e9e5b", "#d64545", "#d98e04"
 
-tab_bt, tab_oi, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "🔬 Signaux OI",
-                                                "📒 En réel (journal)", "📏 Les règles"])
+tab_bt, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "📒 En réel", "📏 Les règles"])
 
 # ---------------------------------------------------------------------------
 # Backtest
@@ -72,12 +71,12 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
         lignes.append({
             "Stratégie": B.libelle(cle),
             "Sortie": B.SORTIES.get(sortie, {}).get("libelle", "Tenue 20 jours"),
-            "Verdict": "— référence" if est_ref else _verdict(app, test, ref[sens]),
+            "Verdict": "— référence" if est_ref else _verdict(app, test, ref.get(sens)),
             "Trades (test)": (test or {}).get("trades"),
             "Gagnants (test)": (test or {}).get("gagnants_pct"),
             "Rend. moyen (test)": (test or {}).get("rend_moy"),
             "Rend. médian (test)": (test or {}).get("rend_med"),
-            "Réf. même sens (test)": ref[sens],
+            "Réf. même sens (test)": ref.get(sens),
             "PF apprentissage": (app or {}).get("profit_factor"),
             "PF test": (test or {}).get("profit_factor"),
             "MAE p90": (tout or {}).get("mae_p90"),
@@ -89,213 +88,203 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
     return df.sort_values(["Verdict", "PF test"], key=lambda s: s.map(ordre) if s.name == "Verdict" else -s.fillna(-1))
 
 
-def _couleur_verdict(v):
+LECT_VERDICT = {"✅ Tient": "✅ Utilisable", "⚠️ À confirmer": "⚠️ À surveiller",
+                "❌ Ne marche pas": "❌ Ne pas utiliser"}
+
+
+def _synthese(tab: pd.DataFrame) -> pd.DataFrame:
+    """Une ligne par stratégie, sa meilleure sortie (choisie sur l'Apprentissage, pas sur le
+    Test, sinon le Test ne prouve plus rien). Les deux côtés du filtre de régime restent dans
+    le détail : le système complet suffit pour décider."""
+    t = tab[tab["Verdict"] != "— référence"].copy()
+    t = t[~t["Stratégie"].isin([B.libelle(k) for k in B.REGIMES])]
+    t["_o"] = t["Verdict"].map({"✅ Tient": 0, "⚠️ À confirmer": 1, "❌ Ne marche pas": 2})
+    t = (t.sort_values(["_o", "PF apprentissage"], ascending=[True, False])
+          .drop_duplicates("Stratégie"))
+    sortie = t["Sortie"].str.extract(r"(MM\d+)", expand=False)
+    utilisable = t["_o"] < 2
+    levier = (t["Levier tenable"].fillna(1) / 2).clip(lower=1).astype(int)
+    return pd.DataFrame({
+        "Stratégie": t["Stratégie"] + sortie.map(lambda s: f" — sortie {s}" if isinstance(s, str) else ""),
+        "Verdict": t["Verdict"].map(LECT_VERDICT),
+        "Gain moyen par trade": t["Rend. moyen (test)"],
+        "Trades": t["Trades (test)"],
+        "Levier max": [f"×{l}" if u else "—" for l, u in zip(levier, utilisable)],
+    })
+
+
+def _couleur(v):
     if isinstance(v, str) and v.startswith("✅"):
         return f"color: {VERT}; font-weight: 600"
     if isinstance(v, str) and v.startswith("❌"):
         return f"color: {ROUGE}; font-weight: 600"
-    if isinstance(v, str) and v.startswith("⚠️"):
+    if isinstance(v, str) and (v.startswith("⚠️") or v.startswith("⏳")):
         return f"color: {ORANGE}; font-weight: 600"
     return ""
 
 
+def _style(df: pd.DataFrame, col: str):
+    sty = df.style
+    return (getattr(sty, "map", None) or sty.applymap)(_couleur, subset=[col])
+
+
 with tab_bt:
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        lancer = st.button("▶️ Lancer un backtest", type="primary",
-                           help="Télécharge l'historique Yahoo de tout l'univers depuis 2020 "
-                                "et rejoue chaque stratégie. 3 à 6 minutes.")
-    with c2:
-        st.caption("Chaque lancement est conservé : tu peux comparer les résultats d'un "
-                   "lancement à l'autre (après un changement de règle, par exemple).")
-    if lancer:
-        barre = st.progress(0.0, text="Démarrage…")
-        try:
-            run, _ = B.lancer(lambda x, msg: barre.progress(min(max(x, 0.0), 1.0), text=msg))
-            barre.progress(1.0, text=f"Terminé : {run}")
-        except Exception as e:
-            st.error(f"Backtest interrompu : {e}")
-
-    runs = B.charger_runs()
-    if runs.empty:
-        st.info("Aucun backtest enregistré. Clique sur « Lancer un backtest ».")
-    else:
-        run = st.selectbox("Lancement", runs["run"].tolist(), index=0,
-                           format_func=lambda r: f"{r} ({int(runs.set_index('run').loc[r, 'trades'])} trades)")
-        params = json.loads(runs.set_index("run").loc[run, "params"] or "{}")
-        resume = B.charger_resume(run)
-        st.caption(
-            f"{params.get('actifs', '?')} actifs · depuis {params.get('depuis', '?')} · "
-            f"**Apprentissage** avant le {params.get('coupure_test', '?')}, **Test** après · "
-            f"frais + glissement {2 * (params.get('frais_pct_cote', 0) + params.get('glissement_pct_cote', 0)):.2f} % "
-            "par aller-retour · funding non compté · sans levier"
-        )
-        if params.get("ecartes"):
-            with st.expander(f"⚠️ {len(params['ecartes'])} actifs écartés ou coupés (données Yahoo)"):
-                st.caption("Mauvais ticker = Yahoo cote un AUTRE token sous ce symbole : à corriger "
-                           "dans la liste des actifs. Historique coupé = Yahoo a réutilisé le "
-                           "symbole d'un ancien token ; seule la partie récente est gardée.")
+    zone = st.container()
+    with st.expander("🔎 Détails : tableau complet, évolution, trades, actifs écartés"):
+        runs = B.charger_runs()
+        run = None
+        if not runs.empty:
+            run = st.selectbox("Lancement", runs["run"].tolist(), index=0,
+                               format_func=lambda r: f"{r} ({int(runs.set_index('run').loc[r, 'trades'])} trades)")
+            params = json.loads(runs.set_index("run").loc[run, "params"] or "{}")
+            resume = B.charger_resume(run)
+            tab = _tableau(resume)
+            st.caption(
+                f"{params.get('actifs', '?')} actifs · depuis {params.get('depuis', '?')} · "
+                f"Apprentissage avant le {params.get('coupure_test', '?')}, Test après · "
+                f"frais + glissement {2 * (params.get('frais_pct_cote', 0) + params.get('glissement_pct_cote', 0)):.2f} % "
+                "par aller-retour · funding non compté · sans levier"
+            )
+            if "ecartes" not in params:
+                st.warning("Lancement antérieur aux garde-fous de données : chiffres faussés, relance.")
+            elif params["ecartes"]:
+                st.markdown(f"**{len(params['ecartes'])} actifs écartés ou coupés** (données Yahoo)")
                 st.write("\n".join(f"- {e}" for e in params["ecartes"]))
-        elif "ecartes" not in params:
-            st.warning("Lancement antérieur aux garde-fous de données : certains actifs avaient "
-                       "un mauvais ticker Yahoo (ARB, JUP, UNI, LIT…) et faussent les chiffres, "
-                       "surtout ceux des références. Relance un backtest.")
-        tab = _tableau(resume)
-        st.dataframe(
-            tab.style.map(_couleur_verdict, subset=["Verdict"]), hide_index=True, width="stretch",
-            column_config={
-                "Gagnants (test)": st.column_config.NumberColumn(format="%.0f %%"),
-                "Rend. moyen (test)": st.column_config.NumberColumn(
-                    format="%+.2f %%", help="Rendement moyen par trade, net de frais, sur la période Test."),
-                "Rend. médian (test)": st.column_config.NumberColumn(
-                    format="%+.2f %%",
-                    help="Le trade du milieu : la moitié des trades fait mieux, la moitié moins "
-                         "bien. Négatif avec une moyenne positive = beaucoup de petites pertes "
-                         "et quelques gros gains (normal en suivi de tendance)."),
-                "Réf. même sens (test)": st.column_config.NumberColumn(
-                    format="%+.2f %%",
-                    help="Même sens, sans aucun critère : des positions de 20 jours prises au "
-                         "hasard sur tous les actifs. Si la stratégie ne fait pas mieux, ses gains "
-                         "viennent du marché (tout baissait), pas de la règle."),
-                "PF apprentissage": st.column_config.NumberColumn(
-                    format="%.2f", help="Profit factor = somme des gains ÷ somme des pertes. "
-                                        "> 1 = gagnant. Période ancienne."),
-                "PF test": st.column_config.NumberColumn(
-                    format="%.2f", help="Profit factor sur le dernier tiers, jamais utilisé pour "
-                                        "régler quoi que ce soit. C'est lui qui compte."),
-                "MAE p90": st.column_config.NumberColumn(
-                    format="%.0f %%", help="9 trades sur 10 n'ont jamais été plus loin que ça "
-                                           "contre toi avant la sortie."),
-                "Levier tenable": st.column_config.NumberColumn(
-                    format="×%.1f", help="Levier qui aurait survécu à 9 trades sur 10 "
-                                         "(liquidation ≈ 100 % ÷ levier). Prends nettement moins."),
-                "Durée moy.": st.column_config.NumberColumn(format="%.0f j"),
-            },
-        )
-
-        # Évolution d'un lancement à l'autre
-        tout = B.charger_resume()
-        tout = tout[(tout["periode"] == "Test") & ~tout["strategie"].isin(B.REFERENCES)]
-        if tout["run"].nunique() > 1:
-            st.markdown("**Évolution du PF test d'un lancement à l'autre**")
-            tout["Stratégie"] = tout["strategie"].map(B.libelle) + " · " + tout["sortie"]
-            piv = tout.pivot_table(index="Stratégie", columns="run", values="profit_factor")
-            st.dataframe(piv[sorted(piv.columns, reverse=True)[:6]], width="stretch")
-
-        with st.expander("🔎 Détail des trades"):
+            st.markdown("**Tableau complet** (Test = depuis la date de coupure)")
+            st.dataframe(_style(tab, "Verdict"), hide_index=True, width="stretch")
+            tout = B.charger_resume()
+            tout = tout[(tout["periode"] == "Test") & ~tout["strategie"].isin(B.REFERENCES)]
+            if tout["run"].nunique() > 1:
+                st.markdown("**PF test d'un lancement à l'autre**")
+                tout["Stratégie"] = tout["strategie"].map(B.libelle) + " · " + tout["sortie"]
+                piv = tout.pivot_table(index="Stratégie", columns="run", values="profit_factor")
+                st.dataframe(piv[sorted(piv.columns, reverse=True)[:6]], width="stretch")
             trades = B.charger_trades(run)
-            if trades.empty:
-                st.info("Aucun trade pour ce lancement.")
-            else:
-                f1, f2, f3 = st.columns(3)
-                strat = f1.selectbox("Stratégie", ["Toutes"] + list(S.STRATEGIES) + list(B.REGIMES)
-                                     + list(B.REFERENCES),
+            if not trades.empty:
+                st.markdown("**Trades**")
+                f1, f2 = st.columns(2)
+                strat = f1.selectbox("Stratégie", ["Toutes"] + list(S.STRATEGIES) + list(B.COMBINES)
+                                     + list(B.REGIMES) + list(B.REFERENCES),
                                      format_func=lambda k: k if k == "Toutes" else B.libelle(k))
-                sortie = f2.selectbox("Sortie", ["Toutes", "mm100", "mm20", "20j"])
-                actif = f3.selectbox("Actif", ["Tous"] + sorted(trades["symbol"].unique()))
+                actif = f2.selectbox("Actif", ["Tous"] + sorted(trades["symbol"].unique()))
                 t = trades
-                if strat != "Toutes":
+                if strat in B.COMBINES:
+                    t = t[t["strategie"].isin(B.COMBINES[strat]["membres"])]
+                elif strat != "Toutes":
                     t = t[t["strategie"] == strat]
-                if sortie != "Toutes":
-                    t = t[t["sortie"] == sortie]
                 if actif != "Tous":
                     t = t[t["symbol"] == actif]
-                st.caption(f"{len(t)} trades · rendement moyen {t['rend_pct'].mean():+.2f} %")
                 t = t.assign(strategie=t["strategie"].map(B.libelle)).sort_values("entree_date", ascending=False)
-                st.dataframe(
-                    t.drop(columns=["run"]), hide_index=True, width="stretch",
-                    column_config={
-                        "rend_pct": st.column_config.NumberColumn("Rend. net", format="%+.2f %%"),
-                        "mae_pct": st.column_config.NumberColumn("MAE", format="%.1f %%"),
-                    },
-                )
+                st.dataframe(t.drop(columns=["run"]), hide_index=True, width="stretch")
 
-# ---------------------------------------------------------------------------
-# Signaux OI — sur les photos horaires enregistrées par l'app
-# ---------------------------------------------------------------------------
-with tab_oi:
-    st.caption(
-        "Yahoo n'a pas d'historique d'open interest : ce test utilise les photos horaires "
-        "Hyperliquid que l'app enregistre depuis début octobre 2026. Quelques semaines, un "
-        "seul régime de marché : c'est une **piste**, pas une preuve. Relance-le dans un mois, "
-        "il aura plus de cas."
-    )
-    if st.button("🔬 Analyser les signaux OI", type="primary",
-                 help="Lit toutes les photos enregistrées. Quelques secondes."):
-        with st.spinner("Lecture des photos et calcul…"):
-            st.session_state["_oi_res"] = O.analyser()
-    if "_oi_res" in st.session_state:
-        _r, _i = st.session_state["_oi_res"]
-        if _r.empty or _r["cas"].sum() == 0:
-            st.info("Pas assez d'historique continu : il faut au moins 7 jours de photos horaires "
-                    "sans trou pour calculer les premiers z-scores (c'est le cas sur Railway, pas "
-                    "forcément en local).")
+    with zone:
+        if st.button("▶️ Lancer un backtest", type="primary",
+                     help="Rejoue chaque stratégie depuis 2020 sur tous les actifs. 3 à 6 minutes."):
+            barre = st.progress(0.0, text="Démarrage…")
+            try:
+                r, _ = B.lancer(lambda x, msg: barre.progress(min(max(x, 0.0), 1.0), text=msg))
+                barre.progress(1.0, text=f"Terminé : {r}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Backtest interrompu : {e}")
+        if run is None:
+            st.info("Aucun backtest enregistré. Clique sur « Lancer un backtest ».")
         else:
-            st.caption(f"{_i['actifs']} actifs · du {_i['debut']:%d/%m/%Y} au {_i['fin']:%d/%m/%Y} · "
-                       f"{_i['photos']} photos · un signal = la 1re heure où la condition est "
-                       f"remplie, puis 24 h de pause pour l'actif")
-            st.markdown(
-                "**Comment lire** : pour 🔍 et 🟢 (le sens est inconnu), compare **Ampleur** à "
-                "**Ampleur marché** — le signal vaut quelque chose si l'actif bouge plus que le "
-                "reste du marché. Pour les autres, compare **Prix** à **Marché** dans le sens "
-                "attendu. Peu de cas = à prendre avec des pincettes."
+            syn = _synthese(tab)
+            ok = syn[syn["Verdict"].str.startswith("✅")]["Stratégie"].tolist()
+            if ok:
+                st.success("**À utiliser :** " + " · ".join(ok))
+            else:
+                st.warning("**Rien de fiable à trader pour l'instant.**")
+            st.dataframe(
+                _style(syn, "Verdict"), hide_index=True, width="stretch",
+                column_config={
+                    "Gain moyen par trade": st.column_config.NumberColumn(
+                        format="%+.2f %%", help="Net de frais, sur la période récente (Test)."),
+                    "Trades": st.column_config.NumberColumn(
+                        help="Sur la période récente. Moins de 30 = trop peu pour être sûr."),
+                    "Levier max": st.column_config.TextColumn(
+                        help="Moitié du levier qui aurait survécu à 9 trades sur 10. "
+                             "Au-delà, un mouvement contraire normal te liquide."),
+                },
             )
-            cc = {"setup": st.column_config.TextColumn("Signal", pinned=True, width="large"),
-                  "cas": st.column_config.NumberColumn("Cas"),
-                  "actifs": st.column_config.NumberColumn("Actifs")}
-            for j in (1, 3, 7):
-                cc[f"moy_{j}"] = st.column_config.NumberColumn(
-                    f"Prix {j} j", format="%+.2f %%", help="Variation moyenne du prix, avec son signe.")
-                cc[f"marche_{j}"] = st.column_config.NumberColumn(
-                    f"Marché {j} j", format="%+.2f %%", help="Tous les actifs, au même moment.")
-                cc[f"hausse_{j}"] = st.column_config.NumberColumn(f"% hausse {j} j", format="%d %%")
-                cc[f"ampleur_{j}"] = st.column_config.NumberColumn(
-                    f"Ampleur {j} j", format="%.2f %%", help="Taille du mouvement, quel que soit le sens.")
-                cc[f"marche_amp_{j}"] = st.column_config.NumberColumn(
-                    f"Ampleur marché {j} j", format="%.2f %%")
-                cc[f"n_{j}"] = st.column_config.NumberColumn(f"n {j} j")
-            st.dataframe(_r, hide_index=True, width="stretch", column_config=cc)
+            st.caption(f"Lancement du {run} · ✅ = gagne sur les deux périodes et mieux que le hasard · "
+                       "règles détaillées dans l'onglet « Les règles ».")
 
 # ---------------------------------------------------------------------------
-# En réel
+# En réel : journal + signaux OI, en lecture directe
 # ---------------------------------------------------------------------------
+
+def _lecture(ecart, n, n_min, seuil, plus, moins):
+    if n is None or pd.isna(n) or n < n_min:
+        return "⏳ Trop tôt pour juger"
+    if ecart is None or pd.isna(ecart) or abs(ecart) < seuil:
+        return "➖ Comme le hasard"
+    return plus if ecart > 0 else moins
+
+
 with tab_reel:
-    st.markdown("**Stratégies de tendance** — depuis le jour où l'actif entre dans la stratégie")
+    st.caption("Ce qui s'est passé APRÈS chaque signal, en vrai, comparé au reste du marché au "
+               "même moment. Écart positif = mieux que le hasard dans le sens du trade.")
+
+    st.markdown("**Stratégies de tendance**")
     _rs = J.resultats_strategies()
     if _rs.empty:
-        st.info("Pas encore de données : le journal note la phase de chaque actif depuis cette "
-                "version. Premiers résultats à 3 jours le surlendemain du premier signal, à 30 "
-                "jours au bout d'un mois.")
+        st.info("Pas encore de données : le journal note la phase de chaque actif depuis cette version.")
     else:
-        cc = {"strategie": st.column_config.TextColumn("Stratégie", pinned=True),
-              "signaux": st.column_config.NumberColumn("Signaux")}
-        for n in J.HORIZONS_STRAT_J:
-            cc[f"rend_{n}"] = st.column_config.NumberColumn(f"Rend. {n} j", format="%+.2f %%",
-                                                            help="Dans le sens du trade : un short dont le prix baisse de 5 % compte +5 %.")
-            cc[f"marche_{n}"] = st.column_config.NumberColumn(f"Marché {n} j", format="%+.2f %%",
-                                                              help="Le même pari (même sens) sur tous les actifs ce jour-là : la référence à battre.")
-            cc[f"gagnants_{n}"] = st.column_config.NumberColumn(f"Gagnants {n} j", format="%d %%")
-            cc[f"n_{n}"] = st.column_config.NumberColumn(f"n {n} j")
-        st.dataframe(_rs, hide_index=True, width="stretch", column_config=cc)
+        st.dataframe(_style(pd.DataFrame({
+            "Stratégie": _rs["strategie"], "Signaux": _rs["signaux"],
+            "Écart vs marché (7 j)": _rs["rend_7"] - _rs["marche_7"],
+            "Lecture": [_lecture(r7 - m7, n, 20, 1.0, "✅ Fait mieux que le hasard",
+                                 "❌ Fait pire que le hasard")
+                        for r7, m7, n in zip(_rs["rend_7"], _rs["marche_7"], _rs["n_7"])],
+        }), "Lecture"), hide_index=True, width="stretch",
+            column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(format="%+.2f pts")})
 
-    st.markdown("**Pastilles du radar** — depuis le changement de pastille")
+    st.markdown("**Pastilles du radar**")
     _sig = J.resultats_signaux()
     if _sig is None or _sig.empty:
         st.info("Aucun changement de pastille enregistré pour l'instant.")
     else:
-        st.dataframe(
-            _sig, hide_index=True, width="stretch",
-            column_order=["etat", "signaux", "rend_1", "marche_1", "rend_3", "marche_3",
-                          "rend_7", "marche_7", "gagnants_7", "n_7"],
-            column_config={
-                "etat": st.column_config.TextColumn("Pastille", pinned=True),
-                **{f"rend_{n}": st.column_config.NumberColumn(f"Rend. {n} j", format="%+.2f %%")
-                   for n in J.HORIZONS_J},
-                **{f"marche_{n}": st.column_config.NumberColumn(f"Marché {n} j", format="%+.2f %%")
-                   for n in J.HORIZONS_J},
-                "gagnants_7": st.column_config.NumberColumn("Gagnants 7 j", format="%d %%"),
-            },
-        )
+        st.dataframe(_style(pd.DataFrame({
+            "Pastille": _sig["etat"], "Signaux": _sig["signaux"],
+            "Écart vs marché (7 j)": _sig["rend_7"] - _sig["marche_7"],
+            "Lecture": [_lecture(r7 - m7, n, 20, 1.0, "✅ Utile", "❌ Fait pire que le hasard")
+                        for r7, m7, n in zip(_sig["rend_7"], _sig["marche_7"], _sig["n_7"])],
+        }), "Lecture"), hide_index=True, width="stretch",
+            column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(format="%+.2f pts")})
+
+    st.markdown("**Signaux d'open interest** (photos horaires depuis octobre)")
+    if st.button("🔬 Analyser les signaux OI", help="Quelques secondes."):
+        with st.spinner("Calcul…"):
+            st.session_state["_oi_res"] = O.analyser()
+    if "_oi_res" in st.session_state:
+        _r, _i = st.session_state["_oi_res"]
+        if _r.empty or _r["cas"].sum() == 0:
+            st.info("Pas assez d'historique continu (7 jours minimum).")
+        else:
+            _r = _r[~_r["setup"].str.startswith("🎲")]
+            sans_sens = _r["setup"].str.contains("prix plat")
+            ecart = (_r["ampleur_7"] - _r["marche_amp_7"]).where(sans_sens, _r["moy_7"] - _r["marche_7"])
+            lect = [
+                _lecture(e, n, 50, 0.5, "✅ Annonce un mouvement plus fort",
+                         "❌ Faux signal : bouge moins que le marché") if s else
+                _lecture(e, n, 50, 0.5, "🛡️ Résiste mieux : ne pas le shorter",
+                         "⚠️ Fait pire : ne pas l'acheter")
+                for e, n, s in zip(ecart, _r["n_7"], sans_sens)
+            ]
+            st.dataframe(_style(pd.DataFrame({
+                "Signal": _r["setup"], "Cas": _r["cas"], "Écart vs marché (7 j)": ecart, "Lecture": lect,
+            }), "Lecture"), hide_index=True, width="stretch",
+                column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(
+                    format="%+.2f pts", help="Prix à 7 j moins le marché au même moment. Pour les "
+                                             "signaux « prix plat » (sens inconnu) : taille du mouvement "
+                                             "moins celle du marché.")})
+            st.caption(f"{_i['actifs']} actifs · du {_i['debut']:%d/%m} au {_i['fin']:%d/%m/%Y} · une "
+                       "seule période de marché : une piste, pas une preuve.")
+            with st.expander("Détail à 1, 3 et 7 jours"):
+                st.dataframe(_r, hide_index=True, width="stretch")
+
 
 # ---------------------------------------------------------------------------
 # Règles
@@ -326,6 +315,8 @@ Comme la référence (positions de 20 jours sur tous les actifs, aucun critère 
 **seulement quand le marché va dans le bon sens** : short si le BTC clôture sous sa
 MM{B.MM_REGIME}, long s'il clôture au-dessus. Aucun réglage optimisé : c'est le test de
 robustesse — il doit faire mieux que la référence sans filtre **sur les deux périodes**.
+Le **système complet** réunit les deux côtés : il est rentable s'il gagne sur les deux périodes,
+quel que soit le régime qui domine.
 
 #### Simulation
 Décision à la clôture, exécution à l'ouverture suivante. Une position à la fois par actif, sans

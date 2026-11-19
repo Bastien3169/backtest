@@ -70,12 +70,22 @@ REGIMES = {
                      "btc_haussier": True},
 }
 
+# Système complet = les deux côtés du filtre de régime réunis : long quand le
+# BTC est au-dessus de sa MM100, short quand il est en dessous. Chaque côté
+# gagne quand son régime domine ; la question est de savoir si l'ENSEMBLE
+# gagne sur les deux périodes. Calculé dans le bilan, à partir des trades.
+COMBINES = {
+    "regime_combine": {"libelle": "🧭 Système complet : long si BTC > MM100, short sinon",
+                       "sens": "les deux", "membres": list(REGIMES)},
+}
+
 TABLE_RESUME = "bt_resume"
 TABLE_TRADES = "bt_trades"
 
 
 def definition(cle: str) -> dict:
-    return S.STRATEGIES.get(cle) or REFERENCES.get(cle) or REGIMES.get(cle) or {}
+    return (S.STRATEGIES.get(cle) or REFERENCES.get(cle) or REGIMES.get(cle)
+            or COMBINES.get(cle) or {})
 
 
 def libelle(cle: str) -> str:
@@ -283,6 +293,11 @@ def bilan(trades: pd.DataFrame, coupure: pd.Timestamp) -> pd.DataFrame:
     if trades.empty:
         return pd.DataFrame()
     t = trades.copy()
+    for cle, c in COMBINES.items():
+        membres = t[t["strategie"].isin(c["membres"])].copy()
+        if not membres.empty:
+            membres["strategie"], membres["sortie"] = cle, "20j"
+            t = pd.concat([t, membres], ignore_index=True)
     t["periode"] = np.where(pd.to_datetime(t["entree_date"]) < coupure, "Apprentissage", "Test")
     lignes = []
     for (cle, sortie), g in t.groupby(["strategie", "sortie"]):
