@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 from src.auth.ui import require_admin
+from src.utils import backtest_oi as O
 from src.utils import backtest_strategies as B
 from src.utils import journal as J
 from src.utils import strategies as S
@@ -37,7 +38,8 @@ st.caption("Ce qui marche et ce qui ne marche pas — sur le passé (backtest) e
 
 VERT, ROUGE, ORANGE = "#2e9e5b", "#d64545", "#d98e04"
 
-tab_bt, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "📒 En réel (journal)", "📏 Les règles"])
+tab_bt, tab_oi, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "🔬 Signaux OI",
+                                                "📒 En réel (journal)", "📏 Les règles"])
 
 # ---------------------------------------------------------------------------
 # Backtest
@@ -206,6 +208,52 @@ with tab_bt:
                         "mae_pct": st.column_config.NumberColumn("MAE", format="%.1f %%"),
                     },
                 )
+
+# ---------------------------------------------------------------------------
+# Signaux OI — sur les photos horaires enregistrées par l'app
+# ---------------------------------------------------------------------------
+with tab_oi:
+    st.caption(
+        "Yahoo n'a pas d'historique d'open interest : ce test utilise les photos horaires "
+        "Hyperliquid que l'app enregistre depuis début octobre 2026. Quelques semaines, un "
+        "seul régime de marché : c'est une **piste**, pas une preuve. Relance-le dans un mois, "
+        "il aura plus de cas."
+    )
+    if st.button("🔬 Analyser les signaux OI", type="primary",
+                 help="Lit toutes les photos enregistrées. Quelques secondes."):
+        with st.spinner("Lecture des photos et calcul…"):
+            st.session_state["_oi_res"] = O.analyser()
+    if "_oi_res" in st.session_state:
+        _r, _i = st.session_state["_oi_res"]
+        if _r.empty or _r["cas"].sum() == 0:
+            st.info("Pas assez d'historique continu : il faut au moins 7 jours de photos horaires "
+                    "sans trou pour calculer les premiers z-scores (c'est le cas sur Railway, pas "
+                    "forcément en local).")
+        else:
+            st.caption(f"{_i['actifs']} actifs · du {_i['debut']:%d/%m/%Y} au {_i['fin']:%d/%m/%Y} · "
+                       f"{_i['photos']} photos · un signal = la 1re heure où la condition est "
+                       f"remplie, puis 24 h de pause pour l'actif")
+            st.markdown(
+                "**Comment lire** : pour 🔍 et 🟢 (le sens est inconnu), compare **Ampleur** à "
+                "**Ampleur marché** — le signal vaut quelque chose si l'actif bouge plus que le "
+                "reste du marché. Pour les autres, compare **Prix** à **Marché** dans le sens "
+                "attendu. Peu de cas = à prendre avec des pincettes."
+            )
+            cc = {"setup": st.column_config.TextColumn("Signal", pinned=True, width="large"),
+                  "cas": st.column_config.NumberColumn("Cas"),
+                  "actifs": st.column_config.NumberColumn("Actifs")}
+            for j in (1, 3, 7):
+                cc[f"moy_{j}"] = st.column_config.NumberColumn(
+                    f"Prix {j} j", format="%+.2f %%", help="Variation moyenne du prix, avec son signe.")
+                cc[f"marche_{j}"] = st.column_config.NumberColumn(
+                    f"Marché {j} j", format="%+.2f %%", help="Tous les actifs, au même moment.")
+                cc[f"hausse_{j}"] = st.column_config.NumberColumn(f"% hausse {j} j", format="%d %%")
+                cc[f"ampleur_{j}"] = st.column_config.NumberColumn(
+                    f"Ampleur {j} j", format="%.2f %%", help="Taille du mouvement, quel que soit le sens.")
+                cc[f"marche_amp_{j}"] = st.column_config.NumberColumn(
+                    f"Ampleur marché {j} j", format="%.2f %%")
+                cc[f"n_{j}"] = st.column_config.NumberColumn(f"n {j} j")
+            st.dataframe(_r, hide_index=True, width="stretch", column_config=cc)
 
 # ---------------------------------------------------------------------------
 # En réel
