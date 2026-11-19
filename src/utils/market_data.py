@@ -339,6 +339,7 @@ def fetch_hl_context() -> dict:
             "open_interest":  round(oi_base * prix) if (oi_base is not None and prix) else None,
             "volume_hl_24h":  _f(ctx, "dayNtlVlm"),
             "levier_max":     actif.get("maxLeverage"),
+            "mark_px":        prix,      # sert à vérifier que le ticker Yahoo est le bon
         }
     return sortie
 
@@ -387,6 +388,12 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             ecartes.append(coin["symbol"] + " (série figée)")
             continue
 
+        _hl_px = contexte_hl.get(coin["hl_name"], {}).get("mark_px")
+        if S.meme_actif(closes.dropna().iloc[-1], _hl_px, coin["hl_name"]) is False:
+            ecartes.append(f"{coin['symbol']} (prix Yahoo ≠ Hyperliquid : mauvais ticker "
+                           f"{coin['ticker']})")
+            continue
+
         # Volume de la dernière journée COMPLÈTE, comparé aux 30 précédentes.
         # (L'ancien calcul prenait la journée en cours, donc quelques heures de
         # volume face à des journées entières : biaisé vers le bas.)
@@ -407,7 +414,10 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
                     if None not in (perf_7d, beta, perf_btc_7d) else None)
 
         hl = contexte_hl.get(coin["hl_name"], {})
-        _tendance = S.metriques_du_jour(completes["Close"])
+        # Tendance longue sur la partie PROPRE de la série (après un éventuel
+        # changement de token chez Yahoo)
+        _cl = completes["Close"].iloc[S.debut_propre(completes["Close"]):]
+        _tendance = S.metriques_du_jour(_cl)
 
         rows.append({
             "symbol":         coin["symbol"],
@@ -436,10 +446,10 @@ def load_screening_data(progress_cb=None) -> pd.DataFrame:
             "closes":         [float(v) for v in closes.dropna().tolist()],
             # Bougies COMPLÈTES, comme le backtest et le journal
             **_tendance,
-            **S.phase_du_jour(completes["Close"], _tendance),
+            **S.phase_du_jour(_cl, _tendance),
             # Moment du court terme dans chaque sens, que l'actif soit en tendance
             # ou non : la page le croise avec SES seuils (réglables).
-            **{f"moment_{_s}": S.moment_du_jour(completes["Close"], _s) for _s in ("short", "long")},
+            **{f"moment_{_s}": S.moment_du_jour(_cl, _s) for _s in ("short", "long")},
             # 1,5 an en journalier : MM100/MM200 de l'entonnoir et courbe à
             # période réglable de la page.
             "closes_long":    [float(v) for v in closes_long.dropna().tolist()],

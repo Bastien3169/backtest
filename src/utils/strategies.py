@@ -41,6 +41,42 @@ STRATEGIES = {
 
 
 # ---------------------------------------------------------------------------
+# Garde-fous de données
+# ---------------------------------------------------------------------------
+# Yahoo réutilise des symboles : « ARB-USD » a coté un autre token avant
+# Arbitrum, et certains tickers suffixés pointent carrément vers le mauvais
+# token (UNI à 0,00005 $ au lieu de 5 $). Un backtest sur ces séries produit
+# des trades à +300 000 %, et un screener des métriques fausses.
+
+SAUT_MAX = 10          # ×10 ou ÷10 en UN jour : changement de token, pas un marché
+ECART_PRIX_MAX = 2.0   # Yahoo et Hyperliquid doivent coter à un facteur 2 près
+
+
+def debut_propre(close: pd.Series) -> int:
+    """Position du premier jour APRÈS le dernier saut de prix impossible.
+    0 si la série est propre de bout en bout."""
+    c = close.astype(float)
+    ratio = c / c.shift(1)
+    sauts = np.flatnonzero(((ratio >= SAUT_MAX) | (ratio <= 1 / SAUT_MAX)).to_numpy())
+    return int(sauts[-1]) if len(sauts) else 0
+
+
+def meme_actif(prix_yahoo, prix_hl, hl_name: str) -> bool | None:
+    """Le ticker Yahoo cote-t-il le même actif que Hyperliquid ?
+    None si on ne peut pas vérifier (un des prix manque). Les actifs « k… »
+    d'Hyperliquid (kPEPE, kBONK…) cotent 1 000 unités."""
+    try:
+        py, ph = float(prix_yahoo), float(prix_hl)
+    except (TypeError, ValueError):
+        return None
+    if not py or not ph or np.isnan(py) or np.isnan(ph):
+        return None
+    if hl_name and hl_name.startswith("k") and hl_name[1:2].isupper():
+        ph = ph / 1000
+    return 1 / ECART_PRIX_MAX <= py / ph <= ECART_PRIX_MAX
+
+
+# ---------------------------------------------------------------------------
 # Métriques de tendance, jour par jour
 # ---------------------------------------------------------------------------
 

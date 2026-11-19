@@ -74,6 +74,7 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
             "Trades (test)": (test or {}).get("trades"),
             "Gagnants (test)": (test or {}).get("gagnants_pct"),
             "Rend. moyen (test)": (test or {}).get("rend_moy"),
+            "Rend. médian (test)": (test or {}).get("rend_med"),
             "Réf. même sens (test)": ref[sens],
             "PF apprentissage": (app or {}).get("profit_factor"),
             "PF test": (test or {}).get("profit_factor"),
@@ -127,6 +128,16 @@ with tab_bt:
             f"frais + glissement {2 * (params.get('frais_pct_cote', 0) + params.get('glissement_pct_cote', 0)):.2f} % "
             "par aller-retour · funding non compté · sans levier"
         )
+        if params.get("ecartes"):
+            with st.expander(f"⚠️ {len(params['ecartes'])} actifs écartés ou coupés (données Yahoo)"):
+                st.caption("Mauvais ticker = Yahoo cote un AUTRE token sous ce symbole : à corriger "
+                           "dans la liste des actifs. Historique coupé = Yahoo a réutilisé le "
+                           "symbole d'un ancien token ; seule la partie récente est gardée.")
+                st.write("\n".join(f"- {e}" for e in params["ecartes"]))
+        elif "ecartes" not in params:
+            st.warning("Lancement antérieur aux garde-fous de données : certains actifs avaient "
+                       "un mauvais ticker Yahoo (ARB, JUP, UNI, LIT…) et faussent les chiffres, "
+                       "surtout ceux des références. Relance un backtest.")
         tab = _tableau(resume)
         st.dataframe(
             tab.style.map(_couleur_verdict, subset=["Verdict"]), hide_index=True, width="stretch",
@@ -134,6 +145,11 @@ with tab_bt:
                 "Gagnants (test)": st.column_config.NumberColumn(format="%.0f %%"),
                 "Rend. moyen (test)": st.column_config.NumberColumn(
                     format="%+.2f %%", help="Rendement moyen par trade, net de frais, sur la période Test."),
+                "Rend. médian (test)": st.column_config.NumberColumn(
+                    format="%+.2f %%",
+                    help="Le trade du milieu : la moitié des trades fait mieux, la moitié moins "
+                         "bien. Négatif avec une moyenne positive = beaucoup de petites pertes "
+                         "et quelques gros gains (normal en suivi de tendance)."),
                 "Réf. même sens (test)": st.column_config.NumberColumn(
                     format="%+.2f %%",
                     help="Même sens, sans aucun critère : des positions de 20 jours prises au "

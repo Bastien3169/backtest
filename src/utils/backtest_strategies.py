@@ -69,11 +69,22 @@ def libelle(cle: str) -> str:
 # Données
 # ---------------------------------------------------------------------------
 
-def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None) -> dict:
-    """{symbol: DataFrame Open/High/Low/Close} en bougies journalières COMPLÈTES."""
-    import yfinance as yf
-    from src.utils.market_data import _bougies_completes
+def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None,
+                ecartes: list | None = None) -> dict:
+    """{symbol: DataFrame Open/High/Low/Close} en bougies journalières COMPLÈTES.
 
+    Deux garde-fous (voir strategies.py) :
+      - ticker Yahoo qui ne cote pas le même actif qu'Hyperliquid → écarté
+      - saut de prix impossible (×10 en un jour) → on ne garde que l'après
+    `ecartes` reçoit la liste des actifs écartés, avec le motif.
+    """
+    import yfinance as yf
+    from src.utils.market_data import _bougies_completes, fetch_hl_context
+
+    ecartes = [] if ecartes is None else ecartes
+    contexte = fetch_hl_context()
+    if not contexte:
+        print("[backtest] Hyperliquid indisponible : contrôle des tickers impossible")
     donnees = {}
     paquets = [coins[i:i + 25] for i in range(0, len(coins), 25)]
     for k, paquet in enumerate(paquets):
@@ -92,6 +103,17 @@ def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None) -> di
                 df = df[["Open", "High", "Low", "Close"]].dropna()
                 df.index = pd.to_datetime(df.index).tz_localize(None)
                 df = _bougies_completes(df)
+                if df.empty:
+                    continue
+                hl_px = contexte.get(c.get("hl_name") or c["symbol"], {}).get("mark_px")
+                if S.meme_actif(df["Close"].iloc[-1], hl_px, c.get("hl_name") or "") is False:
+                    ecartes.append(f"{c['symbol']} (mauvais ticker {c['ticker']})")
+                    continue
+                debut = S.debut_propre(df["Close"])
+                if debut:
+                    ecartes.append(f"{c['symbol']} (historique coupé avant le "
+                                   f"{df.index[debut].date()} : changement de token)")
+                    df = df.iloc[debut:]
                 if len(df) >= S.MM_TENDANCE + S.JOURS_MIN_MM + 10:
                     donnees[c["symbol"]] = df
             except Exception:
@@ -306,7 +328,8 @@ def lancer(progress_cb=None, depuis: str = DEPUIS) -> tuple[str, pd.DataFrame]:
     from src.utils.market_data import get_screening_coins
 
     coins = get_screening_coins()
-    donnees = telecharger(coins, depuis, progress_cb)
+    ecartes = []
+    donnees = telecharger(coins, depuis, progress_cb, ecartes)
     if not donnees:
         raise RuntimeError("aucune donnée Yahoo téléchargée")
     trades = simuler_tout(donnees, progress_cb)
@@ -317,6 +340,7 @@ def lancer(progress_cb=None, depuis: str = DEPUIS) -> tuple[str, pd.DataFrame]:
         "depuis": depuis, "coupure_test": str(coupure.date()), "actifs": len(donnees),
         "frais_pct_cote": FRAIS_PCT, "glissement_pct_cote": GLISSEMENT_PCT,
         "seuils": S.SEUILS, "mm_courte": S.MM_COURTE, "jours_rebond": S.JOURS_REBOND,
+        "ecartes": ecartes,
     }
     if progress_cb:
         progress_cb(0.97, "Enregistrement…")
