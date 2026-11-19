@@ -57,12 +57,29 @@ REFERENCES = {
     "ref_long":  {"libelle": "🎲 Référence long (au hasard)",  "sens": "long"},
 }
 
+# Filtre de régime : la même chose que la référence (positions de 20 jours sur
+# tous les actifs, sans critère sur l'actif), mais seulement quand le marché va
+# dans le bon sens — BTC sous sa MM100 pour shorter, au-dessus pour acheter.
+# Deux règles, aucun réglage optimisé : c'est la version « robuste » à tester
+# contre la référence sans filtre, sur les deux périodes.
+MM_REGIME = 100
+REGIMES = {
+    "regime_short": {"libelle": "🧭 Short quand BTC < MM100 (tenue 20 j)", "sens": "short",
+                     "btc_haussier": False},
+    "regime_long":  {"libelle": "🧭 Long quand BTC > MM100 (tenue 20 j)",  "sens": "long",
+                     "btc_haussier": True},
+}
+
 TABLE_RESUME = "bt_resume"
 TABLE_TRADES = "bt_trades"
 
 
+def definition(cle: str) -> dict:
+    return S.STRATEGIES.get(cle) or REFERENCES.get(cle) or REGIMES.get(cle) or {}
+
+
 def libelle(cle: str) -> str:
-    return (S.STRATEGIES.get(cle) or REFERENCES.get(cle) or {}).get("libelle", cle)
+    return definition(cle).get("libelle", cle)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +142,11 @@ def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None,
 # Simulation
 # ---------------------------------------------------------------------------
 
-def _indicateurs(df: pd.DataFrame) -> pd.DataFrame:
+def _indicateurs(df: pd.DataFrame, btc_haussier: pd.Series | None = None) -> pd.DataFrame:
     d = df.copy()
+    # Régime du jour (connu à la clôture : aucune donnée future)
+    d["btc_haussier"] = (btc_haussier.reindex(d.index, method="ffill")
+                         if btc_haussier is not None else np.nan)
     m = S.metriques_series(d["Close"])
     d = d.join(m)
     for sens in ("short", "long"):
@@ -142,8 +162,8 @@ def _indicateurs(df: pd.DataFrame) -> pd.DataFrame:
 
 def _simuler(symbol: str, d: pd.DataFrame, cle: str, sortie: str | None) -> list[dict]:
     """Une stratégie (ou une référence) sur un actif. Retourne la liste des trades."""
-    ref = cle in REFERENCES
-    sens = (REFERENCES[cle] if ref else S.STRATEGIES[cle])["sens"]
+    ref = cle in REFERENCES or cle in REGIMES          # positions de 20 jours
+    sens = definition(cle)["sens"]
     signe = -1 if sens == "short" else 1
     moment = None if ref else S.STRATEGIES[cle]["moment"]
 
@@ -152,6 +172,9 @@ def _simuler(symbol: str, d: pd.DataFrame, cle: str, sortie: str | None) -> list
     n = len(d)
     if ref:
         valide = d["perf_1an"].notna().to_numpy()
+        if cle in REGIMES:
+            voulu = REGIMES[cle]["btc_haussier"]
+            valide = valide & (d["btc_haussier"] == voulu).to_numpy()
     else:
         qual = d[f"qual_{sens}"].to_numpy(bool)
         mom = d[f"mom_{sens}"].to_numpy(object)
@@ -222,13 +245,21 @@ def _simuler(symbol: str, d: pd.DataFrame, cle: str, sortie: str | None) -> list
 
 def simuler_tout(donnees: dict, progress_cb=None) -> pd.DataFrame:
     combinaisons = ([(k, s) for k in S.STRATEGIES for s in SORTIES]
-                    + [(k, None) for k in REFERENCES])
+                    + [(k, None) for k in REFERENCES] + [(k, None) for k in REGIMES])
+    btc = donnees.get("BTC")
+    btc_haussier = None
+    if btc is not None:
+        mm = btc["Close"].rolling(MM_REGIME).mean()
+        btc_haussier = (btc["Close"] > mm).where(mm.notna())
+    else:
+        combinaisons = [c for c in combinaisons if c[0] not in REGIMES]
+        print("[backtest] BTC absent : filtre de régime non testé")
     trades = []
     for i, (symbol, df) in enumerate(donnees.items()):
         if progress_cb:
             progress_cb(0.6 + 0.35 * i / max(len(donnees), 1), f"Simulation {symbol}…")
         try:
-            d = _indicateurs(df)
+            d = _indicateurs(df, btc_haussier)
         except Exception as e:
             print(f"[backtest] {symbol} ignoré : {e}")
             continue
@@ -340,7 +371,7 @@ def lancer(progress_cb=None, depuis: str = DEPUIS) -> tuple[str, pd.DataFrame]:
         "depuis": depuis, "coupure_test": str(coupure.date()), "actifs": len(donnees),
         "frais_pct_cote": FRAIS_PCT, "glissement_pct_cote": GLISSEMENT_PCT,
         "seuils": S.SEUILS, "mm_courte": S.MM_COURTE, "jours_rebond": S.JOURS_REBOND,
-        "ecartes": ecartes,
+        "ecartes": ecartes, "mm_regime_btc": MM_REGIME,
     }
     if progress_cb:
         progress_cb(0.97, "Enregistrement…")

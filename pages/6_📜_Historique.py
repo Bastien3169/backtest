@@ -68,7 +68,7 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
         g = lambda p: (idx.loc[(cle, sortie, p)].to_dict() if (cle, sortie, p) in idx.index else None)
         app, test, tout = g("Apprentissage"), g("Test"), g("Tout")
         est_ref = cle in B.REFERENCES
-        sens = (B.REFERENCES if est_ref else S.STRATEGIES)[cle]["sens"]
+        sens = B.definition(cle)["sens"]
         lignes.append({
             "Stratégie": B.libelle(cle),
             "Sortie": B.SORTIES.get(sortie, {}).get("libelle", "Tenue 20 jours"),
@@ -188,7 +188,8 @@ with tab_bt:
                 st.info("Aucun trade pour ce lancement.")
             else:
                 f1, f2, f3 = st.columns(3)
-                strat = f1.selectbox("Stratégie", ["Toutes"] + list(S.STRATEGIES) + list(B.REFERENCES),
+                strat = f1.selectbox("Stratégie", ["Toutes"] + list(S.STRATEGIES) + list(B.REGIMES)
+                                     + list(B.REFERENCES),
                                      format_func=lambda k: k if k == "Toutes" else B.libelle(k))
                 sortie = f2.selectbox("Sortie", ["Toutes", "mm100", "mm20", "20j"])
                 actif = f3.selectbox("Actif", ["Tous"] + sorted(trades["symbol"].unique()))
@@ -319,6 +320,12 @@ Sur 1 an (ou depuis le listing, 160 jours minimum) :
 
 Pour chacune, deux sorties : **MM100** (laisser courir) ou **MM20** (sortir plus vite). Rebond et
 Repli ont en plus un stop au-delà de l'extrême des {B.JOURS_STOP} derniers jours.
+
+#### Filtre de régime 🧭
+Comme la référence (positions de 20 jours sur tous les actifs, aucun critère sur l'actif), mais
+**seulement quand le marché va dans le bon sens** : short si le BTC clôture sous sa
+MM{B.MM_REGIME}, long s'il clôture au-dessus. Aucun réglage optimisé : c'est le test de
+robustesse — il doit faire mieux que la référence sans filtre **sur les deux périodes**.
 
 #### Simulation
 Décision à la clôture, exécution à l'ouverture suivante. Une position à la fois par actif, sans
