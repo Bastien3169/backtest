@@ -18,12 +18,20 @@ d'un identifiant numérique. Hyperliquid n'est pas "HYPE-USD" mais
 "HYPE32196-USD". Construire le ticker en f"{symbol}-USD" fait donc disparaître
 silencieusement tous les coins en collision. On résout désormais via l'endpoint
 de recherche Yahoo quand la forme simple échoue.
+
+Piège n° 2 (nov. 2026) : un ticker qui EXISTE n'est pas forcément le BON.
+« ARB-USD », « JUP-USD », « UNI33433-USD » ont des bougies chez Yahoo… d'un
+autre token (UNI à 0,00005 $ au lieu de 5 $). Chaque candidat est donc
+comparé au prix Hyperliquid : seul celui qui cote à un facteur 2 près est
+retenu (voir strategies.meme_actif).
 """
 
 import os
 import re
 import requests
 import yfinance as yf
+
+from src.utils.strategies import meme_actif, prix_unitaire_hl
 
 COINS_FILE = os.path.join(os.path.dirname(__file__), "coins.py")
 
@@ -74,6 +82,26 @@ def fetch_hl_universe() -> list[str]:
     return noms
 
 
+def fetch_hl_prices() -> dict[str, float]:
+    """{nom HL: prix mark} pour tout l'univers — sert à valider les tickers Yahoo.
+    Dictionnaire vide si HL ne répond pas (la validation est alors sautée)."""
+    try:
+        resp = requests.post(HL_INFO_URL, headers={"Content-Type": "application/json"},
+                             json={"type": "metaAndAssetCtxs"}, timeout=15)
+        resp.raise_for_status()
+        meta, ctxs = resp.json()[:2]
+        prix = {}
+        for actif, ctx in zip(meta.get("universe", []), ctxs):
+            try:
+                prix[actif["name"]] = float(ctx.get("markPx") or ctx.get("oraclePx"))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return prix
+    except Exception as e:
+        print(f"Prix Hyperliquid indisponibles ({e}) — tickers non vérifiés.")
+        return {}
+
+
 def fetch_coingecko_names() -> dict[str, str]:
     """{SYMBOLE: nom lisible} — best effort, un échec n'est pas bloquant."""
     try:
@@ -99,13 +127,18 @@ def _base_symbol(hl_name: str) -> str:
     return nom.upper()
 
 
-def test_yfinance_ticker(ticker: str) -> bool:
-    """True si yfinance renvoie au moins quelques bougies pour ce ticker."""
+def dernier_prix_yahoo(ticker: str) -> float | None:
+    """Dernière clôture si yfinance renvoie au moins 7 bougies sur un mois, sinon None."""
     try:
         df = yf.Ticker(ticker).history(period="1mo", interval="1d")
-        return len(df) >= 7
+        return float(df["Close"].dropna().iloc[-1]) if len(df) >= 7 else None
     except Exception:
-        return False
+        return None
+
+
+def test_yfinance_ticker(ticker: str) -> bool:
+    """True si yfinance renvoie au moins quelques bougies pour ce ticker."""
+    return dernier_prix_yahoo(ticker) is not None
 
 
 def _candidat_valide(symbole: str, ticker: str) -> bool:
@@ -123,7 +156,7 @@ def _candidat_valide(symbole: str, ticker: str) -> bool:
     return base == symbole or (base.startswith(symbole) and base[len(symbole):].isdigit())
 
 
-def _yahoo_lookup(symbole: str, requete: str) -> str | None:
+def _yahoo_lookup(symbole: str, requete: str) -> list[str]:
     """Résolution via l'API lookup de Yahoo, à travers yfinance.
 
     IMPORTANT : passer par yfinance et pas par un requests.get direct. Yahoo
@@ -136,34 +169,28 @@ def _yahoo_lookup(symbole: str, requete: str) -> str | None:
         df = yf.Lookup(requete).get_cryptocurrency(count=50)
     except Exception as e:
         print(f"Lookup Yahoo indisponible pour {symbole} ({e})")
-        return None
+        return []
 
     if df is None or len(df) == 0:
-        return None
-
-    for ticker in df.index.astype(str):
-        if _candidat_valide(symbole, ticker):
-            return ticker.upper()
-    return None
+        return []
+    # TOUS les candidats : le premier n'est pas forcément le bon token
+    return [t.upper() for t in df.index.astype(str) if _candidat_valide(symbole, t)]
 
 
-def _yahoo_search(symbole: str, requete: str) -> str | None:
+def _yahoo_search(symbole: str, requete: str) -> list[str]:
     """Repli : l'endpoint de recherche, toujours via la session yfinance."""
     try:
         quotes = yf.Search(requete, max_results=25, news_count=0).quotes
     except Exception as e:
         print(f"Search Yahoo indisponible pour {symbole} ({e})")
-        return None
+        return []
 
-    for q in quotes or []:
-        if q.get("quoteType") != "CRYPTOCURRENCY":
-            continue
-        if _candidat_valide(symbole, q.get("symbol", "")):
-            return q["symbol"].upper()
-    return None
+    return [q["symbol"].upper() for q in quotes or []
+            if q.get("quoteType") == "CRYPTOCURRENCY" and _candidat_valide(symbole, q.get("symbol", ""))]
 
 
-def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "") -> tuple[str | None, str]:
+def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "",
+                         prix_hl: float | None = None) -> tuple[str | None, str]:
     """Ticker Yahoo utilisable pour cet actif HL.
 
     On RASSEMBLE tous les candidats avant d'en tester un seul. Une première
@@ -176,6 +203,11 @@ def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "") -> tuple[str | Non
     `_candidat_valide` reste appliqué, donc chercher par nom ne peut pas faire
     entrer un ticker qui ne correspond pas au symbole.
 
+    Avec `prix_hl`, un candidat n'est retenu que s'il cote le même actif
+    qu'Hyperliquid (facteur 2 près) ; parmi plusieurs, le plus proche gagne.
+    Le ticker direct n'est plus accepté d'office : « ARB-USD » existe, mais
+    c'est un autre token.
+
     Returns:
         (ticker, motif) — ticker None si rien trouvé, motif expliquant pourquoi
         pour que la page de mise à jour affiche autre chose qu'une liste muette.
@@ -183,8 +215,14 @@ def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "") -> tuple[str | Non
     symbole = _base_symbol(hl_name)
 
     direct = f"{symbole}-USD"
-    if test_yfinance_ticker(direct):
-        return direct, "direct"
+    if prix_hl is None:
+        # Sans prix HL, impossible de vérifier : ancien comportement
+        if test_yfinance_ticker(direct):
+            return direct, "direct (non vérifié)"
+    else:
+        px = dernier_prix_yahoo(direct)
+        if px is not None and meme_actif(px, prix_hl, hl_name):
+            return direct, "direct"
 
     requetes = [symbole]
     if nom_lisible and nom_lisible.upper() != symbole:
@@ -193,13 +231,30 @@ def resolve_yahoo_ticker(hl_name: str, nom_lisible: str = "") -> tuple[str | Non
     candidats = []
     for requete in requetes:
         for resolveur in (_yahoo_lookup, _yahoo_search):
-            trouve = resolveur(symbole, requete)
-            if trouve and trouve not in candidats:
-                candidats.append(trouve)
+            for trouve in resolveur(symbole, requete):
+                if trouve not in candidats:
+                    candidats.append(trouve)
 
-    for candidat in candidats:
-        if candidat != direct and test_yfinance_ticker(candidat):
-            return candidat, "résolu"
+    if prix_hl is None:
+        for candidat in candidats:
+            if candidat != direct and test_yfinance_ticker(candidat):
+                return candidat, "résolu (non vérifié)"
+    else:
+        cotes = {}
+        for candidat in dict.fromkeys(candidats + [direct]):
+            px = dernier_prix_yahoo(candidat)
+            if px is not None:
+                cotes[candidat] = px
+        bons = [t for t, px in cotes.items() if meme_actif(px, prix_hl, hl_name)]
+        if bons:
+            # Le plus proche du prix HL (en rapport, dans un sens comme dans l'autre)
+            from math import log
+            ref = prix_unitaire_hl(prix_hl, hl_name)
+            meilleur = min(bons, key=lambda t: abs(log(cotes[t] / ref)) if ref else 0)
+            return meilleur, ("direct" if meilleur == direct else "résolu, prix vérifié")
+        if cotes:
+            detail = ", ".join(f"{t} = {px:.6g} $" for t, px in cotes.items())
+            return None, f"aucun ticker au prix Hyperliquid ({prix_hl:.6g} $) : {detail}"
 
     if candidats:
         # Coté chez Yahoo, mais sans historique exploitable : trop récent ou
@@ -221,6 +276,7 @@ def update_coins(progress_cb=None) -> tuple[list[dict], list[str]]:
     """
     univers = fetch_hl_universe()
     noms    = fetch_coingecko_names()
+    prix_hl = fetch_hl_prices()
     total   = len(univers)
 
     available = []
@@ -235,7 +291,7 @@ def update_coins(progress_cb=None) -> tuple[list[dict], list[str]]:
         if symbole in vus:
             continue
 
-        ticker, motif = resolve_yahoo_ticker(hl_name, noms.get(symbole, ""))
+        ticker, motif = resolve_yahoo_ticker(hl_name, noms.get(symbole, ""), prix_hl.get(hl_name))
         if not ticker:
             skipped.append(hl_name + " (" + motif + ")")
             continue

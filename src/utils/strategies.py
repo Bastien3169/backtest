@@ -61,6 +61,16 @@ def debut_propre(close: pd.Series) -> int:
     return int(sauts[-1]) if len(sauts) else 0
 
 
+def prix_unitaire_hl(prix_hl: float, hl_name: str) -> float:
+    """Prix d'UN token : kPEPE et 1000FLOKI cotent 1 000 unités chez Hyperliquid."""
+    if hl_name and hl_name.startswith("k") and hl_name[1:2].isupper():
+        return prix_hl / 1000
+    if hl_name and hl_name.startswith("1000"):
+        zeros = len(hl_name[1:]) - len(hl_name[1:].lstrip("0"))
+        return prix_hl / 10 ** zeros
+    return prix_hl
+
+
 def meme_actif(prix_yahoo, prix_hl, hl_name: str) -> bool | None:
     """Le ticker Yahoo cote-t-il le même actif que Hyperliquid ?
     None si on ne peut pas vérifier (un des prix manque). Les actifs « k… »
@@ -71,8 +81,7 @@ def meme_actif(prix_yahoo, prix_hl, hl_name: str) -> bool | None:
         return None
     if not py or not ph or np.isnan(py) or np.isnan(ph):
         return None
-    if hl_name and hl_name.startswith("k") and hl_name[1:2].isupper():
-        ph = ph / 1000
+    ph = prix_unitaire_hl(ph, hl_name)
     return 1 / ECART_PRIX_MAX <= py / ph <= ECART_PRIX_MAX
 
 
