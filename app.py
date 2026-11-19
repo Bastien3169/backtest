@@ -80,6 +80,7 @@ else:
         titre_admin = f"Utilisateurs ({attente} en attente)" if attente else "Utilisateurs"
         pages["Admin"] = [
             st.Page("pages/4_📈_BotLive.py", title="Bot Live", icon="🤖"),
+            st.Page("pages/6_📜_Historique.py", title="Historique des stratégies", icon="📜"),
             st.Page("pages/5_👑_Admin.py", title=titre_admin, icon="👑"),
         ]
     pg = st.navigation(pages)

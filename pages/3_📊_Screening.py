@@ -33,6 +33,7 @@ from src.utils.data_loader import get_top100_coins
 from src.utils.hl_snapshots import fetch_hl_live, record_snapshot, load_history, INTERVALLE_MIN
 from src.utils import radar as R
 from src.utils import journal as J
+from src.utils import strategies as S
 
 st.set_page_config(page_title="Screening Crypto", page_icon="📊", layout="wide")
 
@@ -553,6 +554,10 @@ for _i, _per in enumerate(_periodes):
 # ---------------------------------------------------------------------------
 PRESETS = {
     "Aucun": {},
+    # Les 4 stratégies de tendance : mêmes règles que le backtest (strategies.py)
+    **{v["libelle"]: {"tendance": "Baissière" if v["sens"] == "short" else "Haussière",
+                      "moment": v["moment"], **S.SEUILS[v["sens"]]}
+       for v in S.STRATEGIES.values()},
     "Momentum liquide": {
         "perf_7d_min": 5.0, "amplitude_min": 3.0, "volume_min": 5.0,
         "position_min": 60, "funding_max": 40.0,
@@ -561,12 +566,6 @@ PRESETS = {
         "perf_7d_min": -100.0, "amplitude_min": 0.0, "volume_min": 50.0,
         "position_min": 0, "funding_max": 20.0,
     },
-    "Baisse longue sous MM100": {
-        "tendance": "Baissière", "pct_cote_min": 80, "rebond_max": 60.0,
-    },
-    "Hausse longue sur MM100": {
-        "tendance": "Haussière", "pct_cote_min": 80, "rebond_max": 40.0,
-    },
     "Signaux radar": {
         "etats": [R.ETATS[k] for k in ("demarrage", "accumulation", "squeeze", "shorts")],
     },
@@ -574,6 +573,9 @@ PRESETS = {
 
 with st.expander("🔧 Filtres", expanded=True):
     _preset = st.radio("Préréglage", list(PRESETS), horizontal=True, key="scr_preset")
+    st.caption("📉 🔻 📈 🔺 : les 4 stratégies de tendance, backtestées avec exactement les mêmes "
+               "règles — verdict dans « 📜 Historique des stratégies ». Les autres préréglages ne "
+               "sont pas encore testés.")
     _p = PRESETS[_preset]
 
     f1, f2, f3 = st.columns(3)
@@ -617,6 +619,22 @@ with st.expander("🔧 Filtres", expanded=True):
         index=_TENDANCES.index(_p.get("tendance", "Indifférente")),
         format_func=_LIB_TEND.get, key=f"scr_tend_{_preset}",
     )
+    _MOMENTS = ["tout", "contre", "entree"]
+    _LIB_MOM = {"tout": "Toute la tendance",
+                "contre": "👀 Contre-mouvement en cours (surveiller)",
+                "entree": "🎯 Entrée : le contre-mouvement se retourne"}
+    moment = "tout"
+    if tendance != "Indifférente":
+        moment = st.radio(
+            "Moment", _MOMENTS, horizontal=True,
+            index=_MOMENTS.index(_p.get("moment", "tout")),
+            format_func=_LIB_MOM.get, key=f"scr_moment_{_preset}",
+            help=f"Contre-mouvement = rebond dans une baisse (prix au-dessus de la "
+                 f"MM{S.MM_COURTE}) ou repli dans une hausse (prix en dessous). Entrée = il se "
+                 f"retourne aujourd'hui : le prix repasse du bon côté de la MM{S.MM_COURTE}, qui "
+                 f"tourne dans le sens de la tendance, après un contre-mouvement dans les "
+                 f"{S.JOURS_REBOND} jours précédents. Calculé sur bougies journalières complètes.",
+        )
     t2, t3 = st.columns(2)
     with t2:
         pct_cote_min = st.slider(
@@ -641,11 +659,9 @@ with st.expander("🔧 Filtres", expanded=True):
             {"Profil": "Type Mnt russe",       "Perf 1 an": -65, "% jours < MM100": 70,  "Pente MM100": -10, "Pire rebond": 103},
             {"Profil": "Type hausse régulière", "Perf 1 an": 324, "% jours < MM100": 1,   "Pente MM100": 7,   "Pire rebond": 21},
         ])
-        _b = tendance == "Baissière"
-        _ok = (((_ex["Perf 1 an"] < 0) if _b else (_ex["Perf 1 an"] > 0))
-               & ((_ex["% jours < MM100"] if _b else 100 - _ex["% jours < MM100"]) >= pct_cote_min)
-               & ((_ex["Pente MM100"] < 0) if _b else (_ex["Pente MM100"] > 0))
-               & (_ex["Pire rebond"] <= rebond_max))
+        _ok = S.qualifie(_ex["Perf 1 an"], _ex["% jours < MM100"], _ex["Pente MM100"],
+                         _ex["Pire rebond"], "short" if tendance == "Baissière" else "long",
+                         pct_cote_min, rebond_max)
         _ex["Retenu / écarté"] = _ok.map({True: "Retenu", False: "Écarté"})
         _sty = _ex.style
         _sty = getattr(_sty, "map", None) or _sty.applymap   # pandas < 2.1 : applymap
@@ -662,6 +678,17 @@ with st.expander("🔧 Filtres", expanded=True):
             },
         )
 
+# Phase de chaque actif (colonne « Phase » de la vue Tendance longue)
+for _c in ("perf_1an", "pct_sous_mm", "pire_rebond", "pente_mm100",
+           "phase_short", "phase_long", "moment_short", "moment_long"):
+    if _c not in df.columns:
+        df[_c] = None          # tableau chargé avant cette version : cliquer sur Charger
+if tendance == "Indifférente":
+    df["phase"] = [S.libelle_phase(a, b) for a, b in zip(df["phase_short"], df["phase_long"])]
+else:
+    _sens_t = "short" if tendance == "Baissière" else "long"
+    df["phase"] = df[f"moment_{_sens_t}"].map(S.LIB_PHASE[_sens_t])
+
 # Un filtre ne doit jamais écarter une ligne parce que la donnée est absente :
 # fillna avec la valeur qui laisse passer.
 masque = (
@@ -676,19 +703,11 @@ if etats_choisis:
 if tendance != "Indifférente":
     # Exception assumée à la règle du fillna : sans 160 j de cotation, pas de
     # tendance longue — l'actif ne doit pas passer ce filtre par défaut.
-    for _c in ("perf_1an", "pct_sous_mm", "pire_rebond", "pente_mm100"):
-        if _c not in df.columns:
-            df[_c] = None
-    _perf = pd.to_numeric(df["perf_1an"], errors="coerce")
-    _sous = pd.to_numeric(df["pct_sous_mm"], errors="coerce")
-    _cote = _sous if tendance == "Baissière" else 100 - _sous
-    masque &= (
-        ((_perf < 0) if tendance == "Baissière" else (_perf > 0)) &
-        (_cote >= pct_cote_min) &
-        # La tendance doit être EN COURS : MM100 qui va encore dans le bon sens
-        ((pd.to_numeric(df["pente_mm100"], errors="coerce") * (-1 if tendance == "Baissière" else 1)) > 0) &
-        (pd.to_numeric(df["pire_rebond"], errors="coerce") <= rebond_max)
-    )
+    # Règle commune au backtest et au journal : src/utils/strategies.py
+    masque &= S.qualifie(df["perf_1an"], df["pct_sous_mm"], df["pente_mm100"],
+                         df["pire_rebond"], _sens_t, pct_cote_min, rebond_max)
+    if moment != "tout":
+        masque &= df[f"moment_{_sens_t}"] == moment
 df_filtre = df[masque].copy()
 
 if df_filtre.empty:
@@ -892,6 +911,12 @@ COLONNES = {
 }
 
 COLONNES.update({
+    "phase": st.column_config.TextColumn(
+        "Phase", width="medium",
+        help="📉/📈 tendance en cours · 👀 contre-mouvement (rebond dans une baisse, repli "
+             "dans une hausse) : surveiller · 🎯 il se retourne aujourd'hui : signal "
+             "d'entrée des stratégies 🔻 Rebond à shorter et 🔺 Repli à acheter. "
+             "Sans filtre de tendance : seuils par défaut des stratégies."),
     **{f"courbe_{_i + 1}": st.column_config.LineChartColumn(
         _per, width="small", color="auto",
         help="Clôtures sur la période choisie au-dessus du tableau (journalières "
@@ -929,7 +954,7 @@ VUES = {
     "Tendance & risque": ["symbol", "name", "closes", "perf_7d",
                           "perf_custom", "perf_30d", "position_range", "amplitude_med", "atr_pct", "beta",
                           "corr_btc", "volume_m", "volume_rel", "volume_hl_m", "oi_m", "funding_annuel"],
-    "Tendance longue": ["symbol", "courbe_1", "courbe_2", "courbe_3", "perf_1an", "pct_sous_mm",
+    "Tendance longue": ["symbol", "phase", "courbe_1", "courbe_2", "courbe_3", "perf_1an", "pct_sous_mm",
                         "pente_mm100", "pire_rebond", "funding_annuel", "oi_z"],
 }
 VUES["Tout"] = list(COLONNES)
@@ -948,7 +973,7 @@ for _c in _cols:
 # parmi eux compressions les plus basses).
 # ---------------------------------------------------------------------------
 _AUCUNE   = "—"
-_NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes", "courbe_1", "courbe_2", "courbe_3")]
+_NUMERIQ  = [c for c in _cols if c not in ("symbol", "etat", "name", "closes", "phase", "courbe_1", "courbe_2", "courbe_3")]
 _libelle  = lambda c: c if c == _AUCUNE else (COLONNES.get(c, {}) or {}).get("label") or c
 _SENS     = {"↓ du plus fort au plus faible": False, "↑ du plus faible au plus fort": True}
 _MODES    = ["Garder les N premiers", "Seuil"]

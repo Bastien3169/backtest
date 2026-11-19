@@ -43,6 +43,11 @@ hl_etats = Table(
     Column("achat_perp", Float),  # idem sur les futures
     Column("ls_comptes", Float),  # % de comptes futures nets longs
     Column("meteo",    String(40)),                     # météo du marché ce jour-là
+    # Ajoutés nov. 2026 : phase des stratégies de tendance (src/utils/strategies.py),
+    # pour mesurer en RÉEL ce que le backtest mesure sur le passé.
+    # None = pas en tendance longue dans ce sens ; sinon "suite" / "contre" / "entree".
+    Column("phase_short", String(20)),
+    Column("phase_long",  String(20)),
 )
 
 _table_ok = False
@@ -54,10 +59,12 @@ def _init_table() -> None:
         _metadata.create_all(engine)
         # create_all ne modifie pas une table existante : colonnes ajoutées après coup
         colonnes = {c["name"] for c in inspect(engine).get_columns("hl_etats")}
-        for _col in ("rsi_14", "achat_spot", "achat_perp", "ls_comptes"):
+        for _col, _type in (("rsi_14", "FLOAT"), ("achat_spot", "FLOAT"), ("achat_perp", "FLOAT"),
+                            ("ls_comptes", "FLOAT"), ("phase_short", "VARCHAR(20)"),
+                            ("phase_long", "VARCHAR(20)")):
             if _col not in colonnes:
                 with engine.begin() as conn:
-                    conn.execute(text(f"ALTER TABLE hl_etats ADD COLUMN {_col} FLOAT"))
+                    conn.execute(text(f"ALTER TABLE hl_etats ADD COLUMN {_col} {_type}"))
         _table_ok = True
 
 
@@ -105,6 +112,8 @@ def enregistrer(df: pd.DataFrame, live: pd.DataFrame, meteo: str) -> int:
             "score_7d": _f(r.get("score_7d")), "rsi_14": _f(r.get("rsi_14")),
             "achat_spot": _f(r.get("achat_spot_24h")), "achat_perp": _f(r.get("achat_perp_24h")),
             "ls_comptes": _f(r.get("ls_comptes")),
+            "phase_short": r.get("phase_short") if isinstance(r.get("phase_short"), str) else None,
+            "phase_long":  r.get("phase_long") if isinstance(r.get("phase_long"), str) else None,
             "meteo": meteo,
         })
     if lignes:
@@ -149,13 +158,16 @@ def charger() -> pd.DataFrame:
         _init_table()
         with engine.connect() as conn:
             rows = conn.execute(select(hl_etats.c.jour, hl_etats.c.coin, hl_etats.c.etat,
-                                       hl_etats.c.prix, hl_etats.c.meteo)).fetchall()
-        df = pd.DataFrame(rows, columns=["jour", "coin", "etat", "prix", "meteo"])
+                                       hl_etats.c.prix, hl_etats.c.meteo,
+                                       hl_etats.c.phase_short, hl_etats.c.phase_long)).fetchall()
+        df = pd.DataFrame(rows, columns=["jour", "coin", "etat", "prix", "meteo",
+                                         "phase_short", "phase_long"])
         df["jour"] = pd.to_datetime(df["jour"])
         return df
     except Exception as e:
         print(f"[journal] lecture impossible : {e}")
-        return pd.DataFrame(columns=["jour", "coin", "etat", "prix", "meteo"])
+        return pd.DataFrame(columns=["jour", "coin", "etat", "prix", "meteo",
+                                     "phase_short", "phase_long"])
 
 
 def resultats(journal: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
@@ -283,6 +295,64 @@ def resultats_signaux(t: pd.DataFrame | None = None) -> pd.DataFrame:
         lignes.append(ligne)
     ordre = list(_etats_suivis())
     return pd.DataFrame(lignes).sort_values("etat", key=lambda s: s.map(ordre.index))
+
+
+# ---------------------------------------------------------------------------
+# Stratégies de tendance EN RÉEL — le pendant du backtest
+# ---------------------------------------------------------------------------
+# Même principe que les pastilles : un signal = le jour où l'actif ENTRE dans
+# la stratégie, puis le rendement dans le sens du trade 3, 7, 14 et 30 jours
+# plus tard, comparé au même pari sur tous les actifs ce jour-là.
+
+HORIZONS_STRAT_J = (3, 7, 14, 30)
+
+
+def _signaux_strategies(j: pd.DataFrame) -> pd.DataFrame:
+    from src.utils.strategies import STRATEGIES
+    j = j.sort_values(["coin", "jour"]).copy()
+    lignes = []
+    for cle, st_ in STRATEGIES.items():
+        col = f"phase_{st_['sens']}"
+        if col not in j.columns:
+            continue
+        actif = j[col].notna() if st_["moment"] == "tout" else (j[col] == "entree")
+        actif = actif.fillna(False).astype(bool)
+        veille = actif.astype(int).groupby(j["coin"]).shift(1).fillna(0).astype(bool)
+        s = j[actif & ~veille].copy()
+        s["strategie"], s["signe"] = cle, (-1 if st_["sens"] == "short" else 1)
+        lignes.append(s)
+    return pd.concat(lignes) if lignes else pd.DataFrame()
+
+
+def resultats_strategies(journal: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Bilan en réel, par stratégie : signaux, rendement moyen dans le sens du
+    trade, même pari sur tout le marché, % de gagnants, à 3/7/14/30 jours."""
+    j = charger() if journal is None else journal.copy()
+    if j.empty or j[["phase_short", "phase_long"]].isna().all().all():
+        return pd.DataFrame()
+    for n in HORIZONS_STRAT_J:
+        futur = j[["jour", "coin", "prix"]].copy()
+        futur["jour"] = futur["jour"] - pd.Timedelta(days=n)
+        j = j.merge(futur.rename(columns={"prix": f"prix_{n}"}), on=["jour", "coin"], how="left")
+        j[f"perf_{n}"] = (j[f"prix_{n}"] / j["prix"] - 1) * 100
+    marche = j.groupby("jour")[[f"perf_{n}" for n in HORIZONS_STRAT_J]].mean()
+    s = _signaux_strategies(j)
+    if s.empty:
+        return pd.DataFrame()
+    from src.utils.strategies import STRATEGIES
+    lignes = []
+    for cle, g in s.groupby("strategie"):
+        ligne = {"strategie": STRATEGIES[cle]["libelle"], "signaux": len(g)}
+        for n in HORIZONS_STRAT_J:
+            r = (g["signe"] * g[f"perf_{n}"]).dropna()
+            m = g.loc[r.index, "signe"] * g.loc[r.index, "jour"].map(marche[f"perf_{n}"])
+            ligne[f"rend_{n}"] = round(r.mean(), 2) if len(r) else None
+            ligne[f"marche_{n}"] = round(m.mean(), 2) if len(m) else None
+            ligne[f"gagnants_{n}"] = round((r > 0).mean() * 100) if len(r) else None
+            ligne[f"n_{n}"] = len(r)
+        lignes.append(ligne)
+    ordre = [v["libelle"] for v in STRATEGIES.values()]
+    return pd.DataFrame(lignes).sort_values("strategie", key=lambda x: x.map(ordre.index))
 
 
 def anciennete(journal: pd.DataFrame, jour) -> dict:
