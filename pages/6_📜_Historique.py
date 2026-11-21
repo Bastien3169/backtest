@@ -285,6 +285,51 @@ with tab_reel:
             with st.expander("Détail à 1, 3 et 7 jours"):
                 st.dataframe(_r, hide_index=True, width="stretch")
 
+    st.markdown("**Ton setup : compression + z OI fort, dans le sens du BTC**")
+    st.caption(f"Alt dont le range s'est resserré par rapport à ses propres habitudes (compression "
+               f"< {O.COMPRESSION_MAX:g}) et dont l'OI "
+               f"vient de bondir (z OI 24 h ≥ {O.Z_SEUIL:g}). Short si le BTC est sous sa MM20 et sa "
+               "MM100, long s'il est au-dessus des deux. Frais déduits. Comparé au même pari pris "
+               "sur tous les alts au même moment, c'est-à-dire simplement suivre le BTC.")
+    if st.button("🎯 Tester ce setup", help="Quelques secondes (+ l'historique BTC chez Yahoo)."):
+        with st.spinner("Calcul…"):
+            try:
+                st.session_state["_comp_res"] = O.analyser_compression()
+            except Exception as e:
+                st.error(f"Test impossible : {e}")
+    if "_comp_res" in st.session_state:
+        _c, _ci = st.session_state["_comp_res"]
+        if _c.empty:
+            st.info("Pas de données.")
+        else:
+            def _lect_setup(g, h, n):
+                if n is None or n < 30:
+                    return "⏳ Trop peu de cas"
+                if g > 0 and g > h + 0.5:
+                    return "✅ Mieux que suivre le BTC"
+                if g < h - 0.5:
+                    return "❌ Pire que suivre le BTC"
+                return "➖ Pas mieux que suivre le BTC"
+            st.dataframe(_style(pd.DataFrame({
+                "Setup": _c["setup"], "Cas": _c["cas"],
+                "Gagnants (7 j)": _c["gagnants_7"],
+                "Gain moyen (7 j)": _c["gain_7"],
+                "Suivre le BTC (7 j)": _c["hasard_7"],
+                "Lecture": [_lect_setup(g, h, n) for g, h, n in zip(_c["gain_7"], _c["hasard_7"], _c["n_7"])],
+            }), "Lecture"), hide_index=True, width="stretch",
+                column_config={
+                    "Gagnants (7 j)": st.column_config.NumberColumn(format="%.0f %%"),
+                    "Gain moyen (7 j)": st.column_config.NumberColumn(
+                        format="%+.2f %%", help="Dans le sens du trade, frais déduits, position tenue 7 jours."),
+                    "Suivre le BTC (7 j)": st.column_config.NumberColumn(
+                        format="%+.2f %%", help="Même sens, sur TOUS les alts au même moment."),
+                })
+            st.caption(f"Du {_ci['debut']:%d/%m} au {_ci['fin']:%d/%m/%Y} · régime short pendant "
+                       f"{_ci['heures_short'] // 24} j, long pendant {_ci['heures_long'] // 24} j · "
+                       "les 30 premiers jours servent à calculer la compression.")
+            with st.expander("Détail à 1, 3 et 7 jours"):
+                st.dataframe(_c, hide_index=True, width="stretch")
+
 
 # ---------------------------------------------------------------------------
 # Règles

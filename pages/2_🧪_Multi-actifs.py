@@ -24,8 +24,8 @@ from src.utils.data_loader import fetch_ohlcv, get_all_assets
 from src.controllers.backtest import run_backtest_single
 from src.views.indicator_bloc import render_indicator_bloc
 
-st.set_page_config(page_title="Multi-actifs", page_icon="🧪", layout="wide")
-st.title("🧪 Multi-actifs — une stratégie, plusieurs marchés")
+st.set_page_config(page_title="Multi-actifs AT", page_icon="🧪", layout="wide")
+st.title("🧪 Multi-actifs AT — une stratégie, plusieurs actifs")
 st.caption("Fige une stratégie, lance-la sur plusieurs actifs et plusieurs périodes, et regarde où elle tient. Test de robustesse — pour chercher un réglage, va en Optimisation.")
 
 # ---------------------------------------------------------------------------

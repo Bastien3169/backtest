@@ -129,3 +129,88 @@ def analyser(photos: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
             ligne[f"n_{j}"] = int(ok.sum())
         lignes.append(ligne)
     return pd.DataFrame(lignes), info
+
+
+# ---------------------------------------------------------------------------
+# Setup « compression + z OI fort, dans le sens du BTC »
+# ---------------------------------------------------------------------------
+# Signal sur un alt : son range quotidien s'est resserré PAR RAPPORT À SES
+# PROPRES HABITUDES (compression < 1 : amplitude moyenne des 5 derniers jours
+# de CET actif inférieure à sa médiane sur 30 jours) ET son
+# OI vient de bondir (z OI 24 h ≥ 2). Le sens vient du BTC :
+#     short si BTC sous sa MM20 ET sa MM100
+#     long  si BTC au-dessus des deux
+#     rien sinon
+# Comparé au même pari pris au hasard (tous les alts, même sens, même heure) :
+# le setup ne vaut quelque chose que s'il fait mieux que « suivre le BTC ».
+
+COMPRESSION_MAX = 1.0        # strictement en dessous
+JOURS_COURT, JOURS_LONG, JOURS_LONG_MIN = 5, 30, 20
+FRAIS_AR_PCT = 0.19          # aller-retour, comme le backtest principal
+
+
+def _btc_regime(index: pd.DatetimeIndex) -> pd.Series:
+    """+1 (BTC au-dessus de MM20 et MM100), −1 (en dessous des deux), 0 sinon.
+    Bougies journalières Yahoo ; le régime d'un jour vaut pour les heures du
+    LENDEMAIN (la clôture n'est connue qu'à minuit) : aucune donnée future."""
+    import yfinance as yf
+    c = yf.Ticker("BTC-USD").history(period="400d", interval="1d")["Close"]
+    idx = pd.to_datetime(c.index)
+    c.index = (idx.tz_convert(None) if idx.tz is not None else idx).normalize()
+    mm20, mm100 = c.rolling(20).mean(), c.rolling(100).mean()
+    reg = pd.Series(0, index=c.index)
+    reg[(c > mm20) & (c > mm100)] = 1
+    reg[(c < mm20) & (c < mm100)] = -1
+    reg[mm100.isna()] = np.nan
+    reg.index = reg.index + pd.Timedelta(days=1)          # connu le lendemain
+    return reg.reindex(index.normalize()).set_axis(index)
+
+
+def _compression(px: pd.DataFrame) -> pd.DataFrame:
+    """Compression par heure, à partir des photos horaires : range quotidien
+    (max − min) / dernier prix, sur les jours UTC COMPLETS précédant l'heure."""
+    jour = px.index.normalize()
+    rng = (px.groupby(jour).max() - px.groupby(jour).min()) / px.groupby(jour).last()
+    nb = px.groupby(jour).count()
+    rng = rng.where(nb >= 20)                              # journée trop trouée : ignorée
+    court = rng.rolling(JOURS_COURT, min_periods=JOURS_COURT).mean()
+    long_ = rng.rolling(JOURS_LONG, min_periods=JOURS_LONG_MIN).median()
+    comp = (court / long_).shift(1)                        # jours complets uniquement
+    return comp.reindex(jour).set_axis(px.index)
+
+
+def analyser_compression(photos: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
+    photos = charger_photos() if photos is None else photos
+    info = {"photos": len(photos)}
+    if photos.empty:
+        return pd.DataFrame(), info
+    oi = _grille(photos, "oi")
+    px = _grille(photos, "mark_px")
+    info.update(debut=oi.index.min(), fin=oi.index.max(), actifs=oi.shape[1])
+
+    z24 = _z(oi / oi.shift(24) - 1)
+    comp = _compression(px)
+    regime = _btc_regime(oi.index)
+    info["heures_short"] = int((regime == -1).sum())
+    info["heures_long"] = int((regime == 1).sum())
+    base = (z24 >= Z_SEUIL) & (comp < COMPRESSION_MAX)
+    futurs = {h: px.shift(-h) / px - 1 for h in HORIZONS_H}
+
+    lignes = []
+    for sens, signe, lib in ((-1, -1, "📉 Short (BTC sous MM20 et MM100)"),
+                             (1, 1, "📈 Long (BTC au-dessus de MM20 et MM100)")):
+        actif_regime = (regime == sens).to_numpy()[:, None]
+        ev = _evenements((base & actif_regime).fillna(False))
+        ligne = {"setup": lib, "cas": len(ev), "actifs": len({c for _, c in ev})}
+        for h in HORIZONS_H:
+            j = h // 24
+            r = pd.Series([futurs[h].at[t, c] for t, c in ev], dtype=float) * 100 * signe - FRAIS_AR_PCT
+            hasard = pd.Series([futurs[h].loc[t].mean() for t, _ in ev], dtype=float) * 100 * signe - FRAIS_AR_PCT
+            ok = r.notna()
+            ligne[f"gain_{j}"] = round(r[ok].mean(), 2) if ok.any() else None
+            ligne[f"median_{j}"] = round(r[ok].median(), 2) if ok.any() else None
+            ligne[f"gagnants_{j}"] = round((r[ok] > 0).mean() * 100) if ok.any() else None
+            ligne[f"hasard_{j}"] = round(hasard[ok].mean(), 2) if ok.any() else None
+            ligne[f"n_{j}"] = int(ok.sum())
+        lignes.append(ligne)
+    return pd.DataFrame(lignes), info

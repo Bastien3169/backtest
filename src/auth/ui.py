@@ -182,16 +182,19 @@ def account_page():
 # ordre que le menu). Bot Live n'y figure volontairement pas : réservé à l'admin.
 # Le chemin sert aux liens cliquables de l'Accueil : il doit être celui déclaré dans app.py.
 PAGES_INFO = [
-    ("📈", "Backtest", "pages/0_📈_Backtest.py",
+    ("📈", "Backtest · Analyse technique (AT)", "pages/0_📈_Backtest.py",
      "Construis une ou plusieurs stratégies à partir d'indicateurs (RSI, moyennes mobiles, "
      "MACD, Bollinger) et simule-les sur un actif et une période. Rendement, drawdown et "
      "points d'achat/vente sont comparés côte à côte."),
-    ("🔥", "Optimisation", "pages/1_🔥_Optimisation.py",
+    ("🔥", "Backtest · Optimisation AT", "pages/1_🔥_Optimisation.py",
      "Teste d'un coup toutes les combinaisons de take profit et de stop loss sur plusieurs "
      "périodes, pour trouver des réglages qui tiennent partout et pas sur une seule période."),
-    ("🧪", "Multi-actifs", "pages/2_🧪_Multi-actifs.py",
+    ("🧪", "Backtest · Multi-actifs AT", "pages/2_🧪_Multi-actifs.py",
      "Fige une stratégie et lance-la sur plusieurs actifs et plusieurs périodes, pour vérifier "
      "qu'elle ne marche pas uniquement sur l'actif où tu l'as trouvée."),
+    ("🧭", "Backtest · Analyse marché (AM)", "pages/7_🧪_Atelier.py",
+     "Teste une idée de marché (régime du BTC, open interest, compression, tendance) sur toutes "
+     "les cryptos à la fois, et compare-la au même pari pris au hasard."),
     ("📊", "Screening", "pages/3_📊_Screening.py",
      "Classe les cryptos selon leur volatilité, leur corrélation au BTC, leur bêta, leur volume "
      "et leur performance, pour choisir sur quoi travailler."),
