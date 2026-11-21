@@ -26,9 +26,11 @@ import streamlit as st
 
 from src.auth.ui import require_admin
 from src.utils import backtest_oi as O
+from src.utils import bilan as BL
 from src.utils import backtest_strategies as B
 from src.utils import journal as J
 from src.utils import strategies as S
+from src.views import composants as C
 
 st.set_page_config(page_title="Historique des stratégies", page_icon="📜", layout="wide")
 require_admin()
@@ -36,7 +38,6 @@ require_admin()
 st.title("📜 Historique des stratégies")
 st.caption("Ce qui marche et ce qui ne marche pas — sur le passé (backtest) et en réel (journal).")
 
-VERT, ROUGE, ORANGE = "#2e9e5b", "#d64545", "#d98e04"
 
 tab_bt, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "📒 En réel", "📏 Les règles"])
 
@@ -44,24 +45,21 @@ tab_bt, tab_reel, tab_regles = st.tabs(["🧪 Backtest (passé)", "📒 En réel
 # Backtest
 # ---------------------------------------------------------------------------
 
-def _verdict(ligne_app, ligne_test, ref_test) -> str:
-    """✅ tient · ⚠️ à confirmer · ❌ ne marche pas. Règle affichée dans l'onglet Règles."""
-    if ligne_test is None or pd.isna(ligne_test.get("profit_factor")):
-        return "❌ Ne marche pas"
-    pf_t = ligne_test["profit_factor"]
-    pf_a = ligne_app["profit_factor"] if ligne_app is not None else None
-    bat_ref = ref_test is None or ligne_test["rend_moy"] > ref_test
-    if pf_t <= 1 or not bat_ref:
-        return "❌ Ne marche pas"
-    if pf_t >= 1.2 and pf_a is not None and pf_a >= 1.2 and ligne_test["trades"] >= 30:
-        return "✅ Tient"
-    return "⚠️ À confirmer"
+def _stats_ligne(ligne) -> dict:
+    """Ligne de la table bt_resume → format de bilan.stats (pour bilan.verdict)."""
+    if ligne is None:
+        return {"trades": 0}
+    return {"trades": ligne.get("trades") or 0, "pf": ligne.get("profit_factor"),
+            "rend_moy": ligne.get("rend_moy")}
 
 
 def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
     idx = resume.set_index(["strategie", "sortie", "periode"])
-    ref = {sens: (idx.loc[(k, "20j", "Test"), "rend_moy"] if (k, "20j", "Test") in idx.index else None)
-           for k, sens in (("ref_short", "short"), ("ref_long", "long"))}
+    def _ligne(cle, sortie, periode):
+        return idx.loc[(cle, sortie, periode)].to_dict() if (cle, sortie, periode) in idx.index else None
+    refs = {sens: {p: _ligne(k, "20j", p) for p in ("Apprentissage", "Test")}
+            for k, sens in (("ref_short", "short"), ("ref_long", "long"))}
+    ref = {sens: (r["Test"] or {}).get("rend_moy") for sens, r in refs.items()}
     lignes = []
     for (cle, sortie), _ in resume.groupby(["strategie", "sortie"], sort=False):
         g = lambda p: (idx.loc[(cle, sortie, p)].to_dict() if (cle, sortie, p) in idx.index else None)
@@ -71,7 +69,9 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
         lignes.append({
             "Stratégie": B.libelle(cle),
             "Sortie": B.SORTIES.get(sortie, {}).get("libelle", "Tenue 20 jours"),
-            "Verdict": "— référence" if est_ref else _verdict(app, test, ref.get(sens)),
+            "Verdict": "— référence" if est_ref else BL.verdict(
+                [(_stats_ligne(app), _stats_ligne(refs.get(sens, {}).get("Apprentissage"))),
+                 (_stats_ligne(test), _stats_ligne(refs.get(sens, {}).get("Test")))]),
             "Trades (test)": (test or {}).get("trades"),
             "Gagnants (test)": (test or {}).get("gagnants_pct"),
             "Rend. moyen (test)": (test or {}).get("rend_moy"),
@@ -84,12 +84,17 @@ def _tableau(resume: pd.DataFrame) -> pd.DataFrame:
             "Durée moy.": (tout or {}).get("jours_moy"),
         })
     df = pd.DataFrame(lignes)
-    ordre = {"✅ Tient": 0, "⚠️ À confirmer": 1, "❌ Ne marche pas": 2, "— référence": 3}
-    return df.sort_values(["Verdict", "PF test"], key=lambda s: s.map(ordre) if s.name == "Verdict" else -s.fillna(-1))
+    return df.sort_values(["Verdict", "PF test"],
+                          key=lambda s: s.map(_rang) if s.name == "Verdict" else -s.fillna(-1))
 
 
-LECT_VERDICT = {"✅ Tient": "✅ Utilisable", "⚠️ À confirmer": "⚠️ À surveiller",
-                "❌ Ne marche pas": "❌ Ne pas utiliser"}
+def _rang(v: str) -> int:
+    """Ordre d'affichage des verdicts : ✅ puis ⚠️ puis ⏳ puis ❌ puis références."""
+    return {"✅": 0, "⚠": 1, "⏳": 2, "❌": 3}.get(str(v)[:1], 4)
+
+
+LECT_VERDICT = {"✅": "✅ Utilisable", "⚠": "⚠️ À surveiller", "⏳": "⏳ Trop peu de trades",
+                "❌": "❌ Ne pas utiliser"}
 
 
 def _synthese(tab: pd.DataFrame) -> pd.DataFrame:
@@ -98,34 +103,20 @@ def _synthese(tab: pd.DataFrame) -> pd.DataFrame:
     le détail : le système complet suffit pour décider."""
     t = tab[tab["Verdict"] != "— référence"].copy()
     t = t[~t["Stratégie"].isin([B.libelle(k) for k in B.REGIMES])]
-    t["_o"] = t["Verdict"].map({"✅ Tient": 0, "⚠️ À confirmer": 1, "❌ Ne marche pas": 2})
+    t["_o"] = t["Verdict"].map(_rang)
     t = (t.sort_values(["_o", "PF apprentissage"], ascending=[True, False])
           .drop_duplicates("Stratégie"))
     sortie = t["Sortie"].str.extract(r"(MM\d+)", expand=False)
-    utilisable = t["_o"] < 2
+    utilisable = t["_o"] < 2                         # ✅ ou ⚠️
     levier = (t["Levier tenable"].fillna(1) / 2).clip(lower=1).astype(int)
     return pd.DataFrame({
         "Stratégie": t["Stratégie"] + sortie.map(lambda s: f" — sortie {s}" if isinstance(s, str) else ""),
-        "Verdict": t["Verdict"].map(LECT_VERDICT),
-        "Gain moyen par trade": t["Rend. moyen (test)"],
+        "Verdict": t["Verdict"].str[:1].map(LECT_VERDICT),
+        "Rendement moyen / trade (%)": t["Rend. moyen (test)"],
+        "Win rate (%)": t["Gagnants (test)"],
         "Trades": t["Trades (test)"],
         "Levier max": [f"×{l}" if u else "—" for l, u in zip(levier, utilisable)],
     })
-
-
-def _couleur(v):
-    if isinstance(v, str) and v.startswith("✅"):
-        return f"color: {VERT}; font-weight: 600"
-    if isinstance(v, str) and v.startswith("❌"):
-        return f"color: {ROUGE}; font-weight: 600"
-    if isinstance(v, str) and (v.startswith("⚠️") or v.startswith("⏳")):
-        return f"color: {ORANGE}; font-weight: 600"
-    return ""
-
-
-def _style(df: pd.DataFrame, col: str):
-    sty = df.style
-    return (getattr(sty, "map", None) or sty.applymap)(_couleur, subset=[col])
 
 
 with tab_bt:
@@ -151,7 +142,7 @@ with tab_bt:
                 st.markdown(f"**{len(params['ecartes'])} actifs écartés ou coupés** (données Yahoo)")
                 st.write("\n".join(f"- {e}" for e in params["ecartes"]))
             st.markdown("**Tableau complet** (Test = depuis la date de coupure)")
-            st.dataframe(_style(tab, "Verdict"), hide_index=True, width="stretch")
+            st.dataframe(C.tableau(tab, verdicts=["Verdict"]), hide_index=True, width="stretch")
             tout = B.charger_resume()
             tout = tout[(tout["periode"] == "Test") & ~tout["strategie"].isin(B.REFERENCES)]
             if tout["run"].nunique() > 1:
@@ -197,10 +188,11 @@ with tab_bt:
             else:
                 st.warning("**Rien de fiable à trader pour l'instant.**")
             st.dataframe(
-                _style(syn, "Verdict"), hide_index=True, width="stretch",
+                C.tableau(syn, verdicts=["Verdict"]), hide_index=True, width="stretch",
                 column_config={
-                    "Gain moyen par trade": st.column_config.NumberColumn(
-                        format="%+.2f %%", help="Net de frais, sur la période récente (Test)."),
+                    "Rendement moyen / trade (%)": st.column_config.NumberColumn(
+                        format="%+.2f", help="Net de frais, sur la période récente (Test)."),
+                    "Win rate (%)": st.column_config.NumberColumn(format="%.0f"),
                     "Trades": st.column_config.NumberColumn(
                         help="Sur la période récente. Moins de 30 = trop peu pour être sûr."),
                     "Levier max": st.column_config.TextColumn(
@@ -225,34 +217,34 @@ def _lecture(ecart, n, n_min, seuil, plus, moins):
 
 with tab_reel:
     st.caption("Ce qui s'est passé APRÈS chaque signal, en vrai, comparé au reste du marché au "
-               "même moment. Écart positif = mieux que le hasard dans le sens du trade.")
+               "même moment. Alpha positif = mieux que le hasard dans le sens du trade.")
 
     st.markdown("**Stratégies de tendance**")
     _rs = J.resultats_strategies()
     if _rs.empty:
         st.info("Pas encore de données : le journal note la phase de chaque actif depuis cette version.")
     else:
-        st.dataframe(_style(pd.DataFrame({
+        st.dataframe(C.tableau(pd.DataFrame({
             "Stratégie": _rs["strategie"], "Signaux": _rs["signaux"],
-            "Écart vs marché (7 j)": _rs["rend_7"] - _rs["marche_7"],
+            "Alpha vs marché 7 j (%)": _rs["rend_7"] - _rs["marche_7"],
             "Lecture": [_lecture(r7 - m7, n, 20, 1.0, "✅ Fait mieux que le hasard",
                                  "❌ Fait pire que le hasard")
                         for r7, m7, n in zip(_rs["rend_7"], _rs["marche_7"], _rs["n_7"])],
-        }), "Lecture"), hide_index=True, width="stretch",
-            column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(format="%+.2f pts")})
+        }), verdicts=["Lecture"]), hide_index=True, width="stretch",
+            column_config={"Alpha vs marché 7 j (%)": st.column_config.NumberColumn(format="%+.2f")})
 
     st.markdown("**Pastilles du radar**")
     _sig = J.resultats_signaux()
     if _sig is None or _sig.empty:
         st.info("Aucun changement de pastille enregistré pour l'instant.")
     else:
-        st.dataframe(_style(pd.DataFrame({
+        st.dataframe(C.tableau(pd.DataFrame({
             "Pastille": _sig["etat"], "Signaux": _sig["signaux"],
-            "Écart vs marché (7 j)": _sig["rend_7"] - _sig["marche_7"],
+            "Alpha vs marché 7 j (%)": _sig["rend_7"] - _sig["marche_7"],
             "Lecture": [_lecture(r7 - m7, n, 20, 1.0, "✅ Utile", "❌ Fait pire que le hasard")
                         for r7, m7, n in zip(_sig["rend_7"], _sig["marche_7"], _sig["n_7"])],
-        }), "Lecture"), hide_index=True, width="stretch",
-            column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(format="%+.2f pts")})
+        }), verdicts=["Lecture"]), hide_index=True, width="stretch",
+            column_config={"Alpha vs marché 7 j (%)": st.column_config.NumberColumn(format="%+.2f")})
 
     st.markdown("**Signaux d'open interest** (photos horaires depuis octobre)")
     if st.button("🔬 Analyser les signaux OI", help="Quelques secondes."):
@@ -273,11 +265,11 @@ with tab_reel:
                          "⚠️ Fait pire : ne pas l'acheter")
                 for e, n, s in zip(ecart, _r["n_7"], sans_sens)
             ]
-            st.dataframe(_style(pd.DataFrame({
-                "Signal": _r["setup"], "Cas": _r["cas"], "Écart vs marché (7 j)": ecart, "Lecture": lect,
-            }), "Lecture"), hide_index=True, width="stretch",
-                column_config={"Écart vs marché (7 j)": st.column_config.NumberColumn(
-                    format="%+.2f pts", help="Prix à 7 j moins le marché au même moment. Pour les "
+            st.dataframe(C.tableau(pd.DataFrame({
+                "Signal": _r["setup"], "Cas": _r["cas"], "Alpha vs marché 7 j (%)": ecart, "Lecture": lect,
+            }), verdicts=["Lecture"]), hide_index=True, width="stretch",
+                column_config={"Alpha vs marché 7 j (%)": st.column_config.NumberColumn(
+                    format="%+.2f", help="Prix à 7 j moins le marché au même moment. Pour les "
                                              "signaux « prix plat » (sens inconnu) : taille du mouvement "
                                              "moins celle du marché.")})
             st.caption(f"{_i['actifs']} actifs · du {_i['debut']:%d/%m} au {_i['fin']:%d/%m/%Y} · une "
@@ -310,13 +302,13 @@ with tab_reel:
                 if g < h - 0.5:
                     return "❌ Pire que suivre le BTC"
                 return "➖ Pas mieux que suivre le BTC"
-            st.dataframe(_style(pd.DataFrame({
+            st.dataframe(C.tableau(pd.DataFrame({
                 "Setup": _c["setup"], "Cas": _c["cas"],
                 "Gagnants (7 j)": _c["gagnants_7"],
                 "Gain moyen (7 j)": _c["gain_7"],
                 "Suivre le BTC (7 j)": _c["hasard_7"],
                 "Lecture": [_lect_setup(g, h, n) for g, h, n in zip(_c["gain_7"], _c["hasard_7"], _c["n_7"])],
-            }), "Lecture"), hide_index=True, width="stretch",
+            }), verdicts=["Lecture"]), hide_index=True, width="stretch",
                 column_config={
                     "Gagnants (7 j)": st.column_config.NumberColumn(format="%.0f %%"),
                     "Gain moyen (7 j)": st.column_config.NumberColumn(
@@ -367,12 +359,12 @@ quel que soit le régime qui domine.
 Décision à la clôture, exécution à l'ouverture suivante. Une position à la fois par actif, sans
 levier. Frais {B.FRAIS_PCT} % + glissement {B.GLISSEMENT_PCT} % par côté. Funding non compté.
 
-#### Verdict
-- **✅ Tient** : profit factor ≥ 1,2 en Apprentissage **et** en Test, au moins 30 trades en Test,
-  et rendement moyen en Test supérieur à la référence au hasard du même sens.
-- **⚠️ À confirmer** : gagnante en Test et meilleure que la référence, mais pas toutes les
-  conditions ci-dessus (peu de trades, Apprentissage faible…).
-- **❌ Ne marche pas** : profit factor ≤ 1 en Test, ou pas mieux que le hasard.
+#### Verdict (la même règle que la page Analyse marché)
+- **✅ Tient** : sur chaque période (Apprentissage et Test), au moins {BL.TRADES_MIN} trades,
+  profit factor > 1 et rendement moyen par trade supérieur à la référence du même sens.
+- **⚠️** : la règle n'est remplie que sur une partie des périodes.
+- **⏳** : moins de {BL.TRADES_MIN} trades sur toutes les périodes, impossible de juger.
+- **❌ Ne marche pas** : la règle n'est remplie sur aucune période.
 
 #### Limites à garder en tête
 - L'univers = les actifs encore cotés aujourd'hui : les tokens morts manquent (les longs sont un

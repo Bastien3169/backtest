@@ -24,6 +24,8 @@ marché (tous les actifs, au même moment).
 import numpy as np
 import pandas as pd
 
+from src.utils import indicateurs as I
+
 Z_SEUIL         = 2.0      # |z| ≥ 2 = inhabituel (comme le radar)
 Z_SEUIL_4H      = 1.0      # l'OI accélère encore sur les 4 dernières heures
 FENETRE_H       = 60 * 24  # habitudes de l'actif : 60 jours
@@ -31,7 +33,6 @@ MIN_H           = 7 * 24   # 7 jours d'historique avant le premier z-score
 PLAT            = 0.5      # |Δ prix 24 h| < 0,5 × mouvement 24 h habituel
 PAUSE_H         = 24
 HORIZONS_H      = (24, 72, 168)
-MAD_ECART_TYPE  = 1.4826
 
 SETUPS = {
     "sequence":     "🔍 Ta séquence : z OI 24 h ≥ 2, puis OI 4 h qui accélère, prix plat",
@@ -49,7 +50,7 @@ def charger_photos() -> pd.DataFrame:
     return load_history(jours=3650)
 
 
-def _grille(photos: pd.DataFrame, colonne: str) -> pd.DataFrame:
+def grille(photos: pd.DataFrame, colonne: str) -> pd.DataFrame:
     """Une ligne par heure, une colonne par actif. Trou de plus de 2 h = NaN."""
     p = photos.copy()
     p["h"] = pd.to_datetime(p["ts"]).dt.floor("h")
@@ -58,10 +59,9 @@ def _grille(photos: pd.DataFrame, colonne: str) -> pd.DataFrame:
     return g.ffill(limit=2)
 
 
-def _z(chg: pd.DataFrame) -> pd.DataFrame:
-    med = chg.rolling(FENETRE_H, min_periods=MIN_H).median()
-    mad = (chg - med).abs().rolling(FENETRE_H, min_periods=MIN_H).median()
-    return (chg - med) / (MAD_ECART_TYPE * mad.replace(0, np.nan))
+def zscore(chg: pd.DataFrame) -> pd.DataFrame:
+    """z-score robuste par actif sur 60 jours glissants (indicateurs.zscore_robuste)."""
+    return I.zscore_robuste(chg, FENETRE_H, MIN_H)
 
 
 def _evenements(cond: pd.DataFrame) -> list[tuple]:
@@ -82,13 +82,13 @@ def analyser(photos: pd.DataFrame | None = None) -> tuple[pd.DataFrame, dict]:
     info = {"photos": len(photos)}
     if photos.empty:
         return pd.DataFrame(), info
-    oi = _grille(photos, "oi")
-    px = _grille(photos, "mark_px")
+    oi = grille(photos, "oi")
+    px = grille(photos, "mark_px")
     info.update(debut=oi.index.min(), fin=oi.index.max(), actifs=oi.shape[1],
                 heures=len(oi))
 
-    z24 = _z(oi / oi.shift(24) - 1)
-    z4 = _z(oi / oi.shift(4) - 1)
+    z24 = zscore(oi / oi.shift(24) - 1)
+    z4 = zscore(oi / oi.shift(4) - 1)
     pc24 = px / px.shift(24) - 1
     habituel = pc24.abs().rolling(FENETRE_H, min_periods=MIN_H).median()
     plat = pc24.abs() < PLAT * habituel
@@ -184,11 +184,11 @@ def analyser_compression(photos: pd.DataFrame | None = None) -> tuple[pd.DataFra
     info = {"photos": len(photos)}
     if photos.empty:
         return pd.DataFrame(), info
-    oi = _grille(photos, "oi")
-    px = _grille(photos, "mark_px")
+    oi = grille(photos, "oi")
+    px = grille(photos, "mark_px")
     info.update(debut=oi.index.min(), fin=oi.index.max(), actifs=oi.shape[1])
 
-    z24 = _z(oi / oi.shift(24) - 1)
+    z24 = zscore(oi / oi.shift(24) - 1)
     comp = _compression(px)
     regime = _btc_regime(oi.index)
     info["heures_short"] = int((regime == -1).sum())

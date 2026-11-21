@@ -79,6 +79,8 @@ COMBINES = {
                        "sens": "les deux", "membres": list(REGIMES)},
 }
 
+_FRAIS_AR = 2 * (FRAIS_PCT + GLISSEMENT_PCT)
+
 TABLE_RESUME = "bt_resume"
 TABLE_TRADES = "bt_trades"
 
@@ -97,7 +99,7 @@ def libelle(cle: str) -> str:
 # ---------------------------------------------------------------------------
 
 def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None,
-                ecartes: list | None = None) -> dict:
+                ecartes: list | None = None, intervalle: str = "1d") -> dict:
     """{symbol: DataFrame Open/High/Low/Close} en bougies journalières COMPLÈTES.
 
     Deux garde-fous (voir strategies.py) :
@@ -119,8 +121,12 @@ def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None,
             progress_cb(0.6 * k / len(paquets), f"Téléchargement Yahoo {k * 25}/{len(coins)}…")
         tickers = [c["ticker"] for c in paquet]
         try:
-            brut = yf.download(tickers, start=depuis, interval="1d", group_by="ticker",
-                               auto_adjust=False, threads=True, progress=False)
+            if intervalle == "1h":           # Yahoo : 730 jours maximum en horaire
+                brut = yf.download(tickers, period="730d", interval="1h", group_by="ticker",
+                                   auto_adjust=False, threads=True, progress=False)
+            else:
+                brut = yf.download(tickers, start=depuis, interval=intervalle, group_by="ticker",
+                                   auto_adjust=False, threads=True, progress=False)
         except Exception as e:
             print(f"[backtest] paquet ignoré : {e}")
             continue
@@ -129,7 +135,8 @@ def telecharger(coins: list[dict], depuis: str = DEPUIS, progress_cb=None,
                 df = brut[c["ticker"]] if len(tickers) > 1 else brut
                 df = df[["Open", "High", "Low", "Close"]].dropna()
                 df.index = pd.to_datetime(df.index).tz_localize(None)
-                df = _bougies_completes(df)
+                # bougie en cours retirée : la journée du jour en journalier, la dernière heure sinon
+                df = _bougies_completes(df) if intervalle == "1d" else df.iloc[:-1]
                 if df.empty:
                     continue
                 hl_px = contexte.get(c.get("hl_name") or c["symbol"], {}).get("mark_px")
@@ -170,87 +177,38 @@ def _indicateurs(df: pd.DataFrame, btc_haussier: pd.Series | None = None) -> pd.
     return d
 
 
+_MOTIFS = {"stop": "stop", "duree": f"{JOURS_REF} jours", "fin": "ouvert"}
+
+
 def _simuler(symbol: str, d: pd.DataFrame, cle: str, sortie: str | None) -> list[dict]:
-    """Une stratégie (ou une référence) sur un actif. Retourne la liste des trades."""
-    ref = cle in REFERENCES or cle in REGIMES          # positions de 20 jours
+    """Une stratégie (ou une référence) sur un actif, via le moteur partagé (simulation.py)."""
+    from src.utils.simulation import simuler
+    ref = cle in REFERENCES or cle in REGIMES          # positions de 20 jours, sans critère
     sens = definition(cle)["sens"]
     signe = -1 if sens == "short" else 1
-    moment = None if ref else S.STRATEGIES[cle]["moment"]
-
-    o, h, l, c = (d[k].to_numpy(float) for k in ("Open", "High", "Low", "Close"))
-    dates = d.index
-    n = len(d)
     if ref:
-        valide = d["perf_1an"].notna().to_numpy()
+        signal = d["perf_1an"].notna().to_numpy()
         if cle in REGIMES:
-            voulu = REGIMES[cle]["btc_haussier"]
-            valide = valide & (d["btc_haussier"] == voulu).to_numpy()
+            signal = signal & (d["btc_haussier"] == REGIMES[cle]["btc_haussier"]).to_numpy()
+        trades = simuler(d, signal, signe, bougies=JOURS_REF, frais_ar=_FRAIS_AR)
     else:
-        qual = d[f"qual_{sens}"].to_numpy(bool)
-        mom = d[f"mom_{sens}"].to_numpy(object)
-        mm = d[f"mm_{sortie}"].to_numpy(float)
-        haut, bas = d["haut_10"].to_numpy(float), d["bas_10"].to_numpy(float)
-    frais = 2 * (FRAIS_PCT + GLISSEMENT_PCT)
-
-    trades, pos = [], None
-
-    def _fermer(t_sortie, prix, motif):
-        brut = signe * (prix / pos["px"] - 1) * 100
-        trades.append({
-            "symbol": symbol, "strategie": cle, "sortie": sortie or "20j", "sens": sens,
-            "entree_date": dates[pos["t"]], "entree_px": pos["px"],
-            "sortie_date": dates[t_sortie], "sortie_px": prix, "motif": motif,
-            "rend_pct": brut - frais, "mae_pct": pos["mae"],
-            "jours": int((dates[t_sortie] - dates[pos["t"]]).days),
-        })
-
-    signal_veille = False
-    for t in range(n):
-        # 1. Entrée décidée hier → exécution à l'ouverture d'aujourd'hui
-        if pos is None and signal_veille:
-            pos = {"t": t, "px": o[t], "mae": 0.0, "stop": None, "sortir": False}
-            if not ref and moment == "entree":
-                pos["stop"] = haut[t - 1] if sens == "short" else bas[t - 1]
-        signal_veille = False
-
-        if pos is not None:
-            if pos["sortir"]:                              # sortie décidée hier soir
-                _fermer(t, o[t], pos["sortir"])
-                pos = None
-            else:
-                # pire mouvement contre la position aujourd'hui
-                adverse = (h[t] / pos["px"] - 1) if sens == "short" else (1 - l[t] / pos["px"])
-                pos["mae"] = max(pos["mae"], adverse * 100)
-                stop = pos["stop"]
-                touche = stop is not None and ((sens == "short" and h[t] >= stop) or
-                                               (sens == "long" and l[t] <= stop))
-                if touche:
-                    prix = max(o[t], stop) if sens == "short" else min(o[t], stop)
-                    _fermer(t, prix, "stop")
-                    pos = None
-                    continue                               # pas de nouvelle entrée le jour d'un stop
-                if ref:
-                    if t - pos["t"] >= JOURS_REF - 1:
-                        pos["sortir"] = f"{JOURS_REF} jours"
-                elif not np.isnan(mm[t]) and signe * (c[t] - mm[t]) < 0:
-                    pos["sortir"] = f"clôture {'au-dessus' if sens == 'short' else 'sous'} MM"
-                if pos["sortir"] and t == n - 1:
-                    pos["sortir"] = False                  # fermé plus bas comme position ouverte
-            if pos is not None:
-                continue
-
-        # 2. Signal d'entrée à la clôture d'aujourd'hui (exécuté demain)
-        if t == n - 1:
-            break
-        if ref:
-            signal_veille = bool(valide[t])               # tenues de 20 j, bout à bout
-        else:
-            bon_cote = not np.isnan(mm[t]) and signe * (c[t] - mm[t]) > 0
-            signal_veille = bool(qual[t] and bon_cote and (moment == "tout" or mom[t] == "entree"))
-
-    if pos is not None:
-        _fermer(n - 1, c[n - 1], "ouvert")
-    return trades
+        moment = S.STRATEGIES[cle]["moment"]
+        mm = d[f"mm_{sortie}"]
+        # entrée seulement du bon côté de la MM de sortie (sinon coupé dès le lendemain)
+        signal = (d[f"qual_{sens}"] & (signe * (d["Close"] - mm) > 0)).to_numpy(bool)
+        if moment == "entree":
+            signal &= (d[f"mom_{sens}"] == "entree").to_numpy()
+        stop = (d["haut_10"] if sens == "short" else d["bas_10"]).to_numpy(float) \
+            if moment == "entree" else None
+        trades = simuler(d, signal, signe, mm=mm.to_numpy(float), stop_niveau=stop, frais_ar=_FRAIS_AR)
+    libelle_mm = f"clôture {'au-dessus' if sens == 'short' else 'sous'} MM"
+    return [{
+        "symbol": symbol, "strategie": cle, "sortie": sortie or "20j", "sens": sens,
+        "entree_date": t["entree"], "entree_px": t["entree_px"],
+        "sortie_date": t["sortie"], "sortie_px": t["sortie_px"],
+        "motif": libelle_mm if t["motif"] == "mm" else _MOTIFS.get(t["motif"], t["motif"]),
+        "rend_pct": t["rend_pct"], "mae_pct": t["mae_pct"], "jours": t["jours"],
+    } for t in trades]
 
 
 def simuler_tout(donnees: dict, progress_cb=None) -> pd.DataFrame:
@@ -299,25 +257,19 @@ def bilan(trades: pd.DataFrame, coupure: pd.Timestamp) -> pd.DataFrame:
             membres["strategie"], membres["sortie"] = cle, "20j"
             t = pd.concat([t, membres], ignore_index=True)
     t["periode"] = np.where(pd.to_datetime(t["entree_date"]) < coupure, "Apprentissage", "Test")
+    from src.utils.bilan import stats
     lignes = []
     for (cle, sortie), g in t.groupby(["strategie", "sortie"]):
         for periode, gg in [("Tout", g)] + list(g.groupby("periode")):
-            r = gg["rend_pct"]
-            gains, pertes = r[r > 0].sum(), -r[r < 0].sum()
-            mae90 = float(gg["mae_pct"].quantile(0.9)) if len(gg) else np.nan
+            st_ = stats(gg, entree="entree_date", duree="jours")
+            # Noms des colonnes de la table bt_resume (inchangés : anciens lancements lisibles)
             lignes.append({
                 "strategie": cle, "sortie": sortie, "periode": periode,
-                "trades": len(gg), "actifs": gg["symbol"].nunique(),
-                "gagnants_pct": round((r > 0).mean() * 100, 1),
-                "rend_moy": round(r.mean(), 2), "rend_med": round(r.median(), 2),
-                "gain_moy": round(r[r > 0].mean(), 2) if (r > 0).any() else None,
-                "perte_moy": round(r[r < 0].mean(), 2) if (r < 0).any() else None,
-                "profit_factor": round(gains / pertes, 2) if pertes > 0 else None,
-                "mae_med": round(float(gg["mae_pct"].median()), 1),
-                "mae_p90": round(mae90, 1),
-                # Levier qui aurait survécu à 9 trades sur 10 (liquidation ≈ 100 % / levier)
-                "levier_tenable": round(min(100 / mae90, 50), 1) if mae90 and mae90 > 0 else None,
-                "jours_moy": round(gg["jours"].mean(), 1),
+                "trades": st_["trades"], "actifs": st_["actifs"],
+                "gagnants_pct": st_["gagnants"], "rend_moy": st_["rend_moy"], "rend_med": st_["rend_med"],
+                "gain_moy": st_["gain_gagnants"], "perte_moy": st_["perte_perdants"],
+                "profit_factor": st_["pf"], "mae_med": st_["mae_med"], "mae_p90": st_["mae_p90"],
+                "levier_tenable": st_["levier_tenable"], "jours_moy": st_["duree_moy"],
             })
     return pd.DataFrame(lignes)
 

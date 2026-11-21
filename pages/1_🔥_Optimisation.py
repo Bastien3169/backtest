@@ -22,12 +22,13 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import streamlit as st
+
+from src.views import composants as C
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import date
 
-from src.utils.data_loader import get_all_assets, fetch_ohlcv, fetch_btc_mm
+from src.utils.data_loader import fetch_ohlcv, fetch_btc_mm
 from src.controllers.backtest import run_backtest_single, precompute
 from src.views.indicator_bloc import render_indicator_bloc
 
@@ -39,13 +40,7 @@ st.caption(
     "La stratégie d'indicateurs reste identique — seuls TP et SL varient."
 )
 
-# Plages par défaut — identiques à celles de app.py
-PLAGES_DEFAUT = [
-    ("Bull",  date(2024, 10, 1), date(2025, 10, 1)),
-    ("Range", date(2024, 4, 15), date(2024, 9, 30)),
-    ("Bear",  date(2025, 10, 1), date(2026, 6, 3)),
-]
-DUREES_DEFAUT = "180,360,720,1080"
+# Barre de gauche, plages par défaut (Bull / Range / Bear) : src/views/composants.py
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -62,70 +57,16 @@ if "opti_periodes" not in st.session_state:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Paramètres")
-
-    capital = st.number_input("Capital ($)", min_value=1.0, value=1000.0, step=100.0)
-    frais_pct = st.number_input(
-        "Frais par transaction (%)", min_value=0.0, max_value=10.0,
-        value=0.1, step=0.01, format="%.2f",
-    )
-
+    capital = C.capital("opti_")
+    frais_pct = C.frais("opti_")
     st.divider()
-    st.subheader("📊 Marché")
-
-    _assets = get_all_assets()
-    coin_options = {f"{c['symbol']} — {c['name']}": c["id"] for c in _assets}
-    coin_label = st.selectbox("Paire", list(coin_options.keys()), index=0)
-    coin_id = coin_options[coin_label]
-
-    timeframe = st.selectbox("Temporalité", ["jour", "heure", "semaine", "mois"], index=0)
-
+    _actifs, timeframe = C.marche("opti_")
+    coin_id = _actifs[0]["id"]
+    coin_label = f"{_actifs[0]['symbol']} — {_actifs[0]['name']}"
     st.divider()
-    st.subheader("📅 Périodes testées")
-
-    mode_periode = st.radio(
-        "Mode", ["Durées prédéfinies", "Plages de dates"],
-        index=0, horizontal=True, key="opti_mode_periode",
-    )
-
+    _mode, _periodes = C.periodes("opti_")
     # periodes = liste de (label, duree_bougies, date_range_ou_None)
-    periodes = []
-
-    if mode_periode == "Durées prédéfinies":
-        durees_raw = st.text_input(
-            "Durées (nb de bougies, séparées par des virgules)",
-            value=DUREES_DEFAUT,
-            help="Ex : 180,360,720,1080 — une heatmap par durée",
-        )
-        try:
-            durees = sorted({
-                int(x.strip()) for x in durees_raw.split(",")
-                if x.strip().isdigit() and int(x.strip()) > 1
-            })
-        except Exception:
-            durees = [180, 360, 720, 1080]
-        if not durees:
-            durees = [180, 360, 720, 1080]
-        periodes = [(f"{d}j", d, None) for d in durees]
-
-    else:
-        st.caption("Les 3 régimes de marché par défaut — modifiables")
-        for i, (nom_defaut, d1_defaut, d2_defaut) in enumerate(PLAGES_DEFAUT):
-            with st.container(border=True):
-                nom = st.text_input(
-                    "Nom", value=nom_defaut, key=f"opti_plage_nom_{i}",
-                    label_visibility="collapsed",
-                )
-                c1, c2 = st.columns(2)
-                with c1:
-                    d1 = st.date_input("Du", value=d1_defaut, key=f"opti_plage_d1_{i}")
-                with c2:
-                    d2 = st.date_input("Au", value=d2_defaut, key=f"opti_plage_d2_{i}")
-                if d1 < d2:
-                    nb_jours = (d2 - d1).days
-                    periodes.append((nom, max(1, nb_jours), (d1, d2)))
-                    st.caption(f"→ {nb_jours} jours")
-                else:
-                    st.error("Début doit précéder fin")
+    periodes = [(p["nom"], p["bougies"], p["plage"]) for p in _periodes]
 
     st.divider()
 

@@ -230,6 +230,14 @@ def _build_signal(df: pd.DataFrame, cfg: dict, side: str) -> pd.Series:
     return combined.fillna(False)
 
 
+def indicateurs_actifs(cfg: dict) -> bool:
+    """Au moins un indicateur est-il activé dans ce bloc ? (sinon _build_signal renvoie
+    toujours False : aucune entrée, ou aucune sortie par indicateur)."""
+    return bool(cfg.get("use_rsi") or cfg.get("mm_configs") or cfg.get("mm_period")
+                or cfg.get("mm_align_periods") or (cfg.get("mm_cross_a") and cfg.get("mm_cross_b"))
+                or cfg.get("use_macd") or cfg.get("use_bollinger") or cfg.get("btc_cross_period"))
+
+
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
@@ -270,9 +278,20 @@ def precompute(df: pd.DataFrame, strategy: dict) -> dict:
     df_full  = apply_all_indicators(df, ind_merged)
     is_short = strategy.get("is_short", False)
 
+    sig_entry = _build_signal(df_full, ind_achat, side="sell" if is_short else "buy")
+    # Filtre de marché (conditions de marché de la page Stratégies, voir
+    # src/utils/conditions_marche.py) : une Series booléenne sur le même index.
+    # Il s'AJOUTE aux indicateurs d'entrée (ET logique) ; sans indicateur
+    # d'entrée, il devient à lui seul le signal d'entrée. Absent = comportement
+    # historique inchangé.
+    filtre = strategy.get("filtre_marche")
+    if filtre is not None:
+        filtre = filtre.reindex(df_full.index).fillna(False).astype(bool)
+        sig_entry = (sig_entry & filtre) if indicateurs_actifs(ind_achat) else filtre
+
     return {
         "df_full":        df_full,
-        "sig_entry_full": _build_signal(df_full, ind_achat, side="sell" if is_short else "buy"),
+        "sig_entry_full": sig_entry,
         "sig_exit_full":  _build_signal(df_full, ind_vente, side="buy"  if is_short else "sell"),
     }
 

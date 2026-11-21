@@ -5,8 +5,8 @@ Lancement : streamlit run app.py   (start.py le fait déjà sur Railway)
 1. Lit le cookie de session et identifie l'utilisateur.
 2. Construit la liste des pages SELON LE RÔLE avec st.navigation :
    - non connecté ou compte non validé → uniquement la page de connexion / inscription
-   - user         → Accueil (page d'arrivée), section Backtest (Analyse technique,
-                    Optimisation AT, Multi-actifs AT, Analyse marché), Screening, Mon compte
+   - user         → Accueil (page d'arrivée), section Backtest (Stratégies, Optimisation),
+                    Screening, Mon compte
    - admin        → + Bot Live + Admin
    Une page absente de la liste n'existe pas pour cet utilisateur : ni lien dans
    le menu, ni accès en tapant son URL.
@@ -68,10 +68,8 @@ else:
         # Le titre de section porte le mot « Backtest » : les entrées restent courtes
         # et disent seulement CE QU'ON TESTE.
         "Backtest": [
-            st.Page("pages/0_📈_Backtest.py", title="Analyse technique (AT)", icon="📈"),
-            st.Page("pages/1_🔥_Optimisation.py", title="Optimisation AT", icon="🔥"),
-            st.Page("pages/2_🧪_Multi-actifs.py", title="Multi-actifs AT", icon="🧪"),
-            st.Page("pages/7_🧪_Atelier.py", title="Analyse marché (AM)", icon="🧭"),
+            st.Page("pages/0_📈_Backtest.py", title="Stratégies", icon="📈"),
+            st.Page("pages/1_🔥_Optimisation.py", title="Optimisation", icon="🔥"),
         ],
         "Sélection": [
             st.Page("pages/3_📊_Screening.py", title="Screening", icon="📊"),
@@ -99,11 +97,4 @@ else:
 if pg.title != "Screening":
     for _k in [k for k in st.session_state if str(k).startswith("scr_")]:
         st.session_state[_k] = st.session_state[_k]
-# Même chose pour Backtest › Marché (clés « at_ ») : la stratégie composée survit à un
-# passage sur une autre page. Les boutons de suppression ne sont pas des valeurs.
-if pg.title != "Analyse marché (AM)":
-    for _k in [k for k in st.session_state
-               if str(k).startswith("at_") and not str(k).startswith("at_del_")]:
-        st.session_state[_k] = st.session_state[_k]
-
 pg.run()

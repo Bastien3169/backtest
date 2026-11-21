@@ -18,6 +18,7 @@ import yfinance as yf
 import requests
 import importlib.util
 
+from src.utils import indicateurs as I
 from src.utils import strategies as S
 import os
 
@@ -188,17 +189,14 @@ def _compression(df: pd.DataFrame, jours_court: int = 5,
     dont le SENS reste inconnu.
 
     Calculée sur bougies COMPLÈTES uniquement (voir _bougies_completes).
+    Formule partagée : indicateurs.compression.
     """
     if df is None or not {"High", "Low", "Close"} <= set(df.columns):
         return None
-    amplitude = ((df["High"] - df["Low"]) / df["Close"] * 100)
-    amplitude = amplitude.replace([np.inf, -np.inf], np.nan).dropna()
-    if len(amplitude) < jours_long:
+    if I.amplitude(df).dropna().size < jours_long:
         return None
-    reference = float(amplitude.tail(jours_long).median())
-    if reference <= 0:
-        return None
-    return round(float(amplitude.tail(jours_court).mean()) / reference, 2)
+    val = I.compression(df.dropna(subset=["High", "Low", "Close"]), jours_court, jours_long).iloc[-1]
+    return None if pd.isna(val) else round(float(val), 2)
 
 
 def _atr_pct(df: pd.DataFrame, jours: int = FENETRE_RISQUE) -> float | None:
@@ -232,17 +230,12 @@ def _rsi(df: pd.DataFrame, periode: int = 14) -> float | None:
 
     > 70 : mouvement haussier étiré · < 30 : mouvement baissier étiré.
     En crypto, un RSI > 70 peut durer des semaines dans une vraie tendance :
-    c'est un voyant d'excès, pas un signal de vente.
+    c'est un voyant d'excès, pas un signal de vente. Formule partagée : indicateurs.rsi.
     """
     if df is None or "Close" not in df or len(df) < periode * 3:
         return None
-    delta = df["Close"].diff()
-    hausse = delta.clip(lower=0).ewm(alpha=1 / periode, adjust=False).mean()
-    baisse = (-delta.clip(upper=0)).ewm(alpha=1 / periode, adjust=False).mean()
-    if float(baisse.iloc[-1]) == 0:
-        return 100.0
-    rs = float(hausse.iloc[-1]) / float(baisse.iloc[-1])
-    return round(100 - 100 / (1 + rs), 1)
+    val = I.rsi(df["Close"], periode).iloc[-1]
+    return None if pd.isna(val) else round(float(val), 1)
 
 
 def _rendements(serie: pd.Series, jours: int = FENETRE_RISQUE) -> pd.Series:
